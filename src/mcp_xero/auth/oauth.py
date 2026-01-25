@@ -157,6 +157,34 @@ public class CredManager {{
     return None
 
 
+def _get_secret_tool_password_linux(name: str) -> str | None:
+    """Retrieve password from Linux secret storage using secret-tool (libsecret).
+
+    Args:
+        name: Secret name (e.g., 'xero-client-id')
+
+    Returns:
+        Password if found, None otherwise
+
+    Requires:
+        - libsecret-tools package (provides secret-tool command)
+        - A running secret service (GNOME Keyring, KDE Wallet, etc.)
+    """
+    try:
+        result = subprocess.run(
+            ["secret-tool", "lookup", "service", "xero-mcp", "name", name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None
+
+
 def _get_secure_credential(name: str) -> str | None:
     """Retrieve credential from platform-specific secure storage.
 
@@ -169,13 +197,14 @@ def _get_secure_credential(name: str) -> str | None:
     Platform support:
         - macOS: Keychain (security command)
         - Windows: Credential Manager (PowerShell)
-        - Linux: Not yet implemented (returns None)
+        - Linux: libsecret via secret-tool (GNOME Keyring, KDE Wallet)
     """
     if sys.platform == "darwin":
         return _get_keychain_password_macos(name)
     elif sys.platform == "win32":
         return _get_credential_password_windows(name)
-    # Linux: could add libsecret/keyring support later
+    elif sys.platform.startswith("linux"):
+        return _get_secret_tool_password_linux(name)
     return None
 
 # Xero OAuth endpoints
