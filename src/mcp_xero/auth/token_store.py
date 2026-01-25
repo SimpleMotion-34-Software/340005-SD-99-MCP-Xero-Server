@@ -14,20 +14,12 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
 @dataclass
-class TokenSet:
-    """OAuth token set."""
+class Tenant:
+    """Xero tenant (organization) information."""
 
-    access_token: str
-    refresh_token: str
-    expires_at: float
-    token_type: str
-    scope: list[str]
-    tenant_id: str | None = None
-
-    @property
-    def is_expired(self) -> bool:
-        """Check if the access token is expired."""
-        return datetime.now().timestamp() >= self.expires_at - 60  # 60s buffer
+    tenant_id: str
+    tenant_name: str
+    tenant_type: str  # "ORGANISATION" or "PRACTICE"
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -37,12 +29,67 @@ class TokenSet:
     def from_dict(cls, data: dict) -> Self:
         """Create from dictionary."""
         return cls(
+            tenant_id=data["tenant_id"],
+            tenant_name=data.get("tenant_name", "Unknown"),
+            tenant_type=data.get("tenant_type", "ORGANISATION"),
+        )
+
+
+@dataclass
+class TokenSet:
+    """OAuth token set."""
+
+    access_token: str
+    refresh_token: str
+    expires_at: float
+    token_type: str
+    scope: list[str]
+    tenant_id: str | None = None  # Active tenant ID
+    tenants: list[Tenant] | None = None  # All available tenants
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if the access token is expired."""
+        return datetime.now().timestamp() >= self.expires_at - 60  # 60s buffer
+
+    @property
+    def active_tenant(self) -> Tenant | None:
+        """Get the active tenant info."""
+        if not self.tenants or not self.tenant_id:
+            return None
+        for tenant in self.tenants:
+            if tenant.tenant_id == self.tenant_id:
+                return tenant
+        return None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        data = {
+            "access_token": self.access_token,
+            "refresh_token": self.refresh_token,
+            "expires_at": self.expires_at,
+            "token_type": self.token_type,
+            "scope": self.scope,
+            "tenant_id": self.tenant_id,
+        }
+        if self.tenants:
+            data["tenants"] = [t.to_dict() for t in self.tenants]
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Self:
+        """Create from dictionary."""
+        tenants = None
+        if "tenants" in data:
+            tenants = [Tenant.from_dict(t) for t in data["tenants"]]
+        return cls(
             access_token=data["access_token"],
             refresh_token=data["refresh_token"],
             expires_at=data["expires_at"],
             token_type=data["token_type"],
             scope=data.get("scope", []),
             tenant_id=data.get("tenant_id"),
+            tenants=tenants,
         )
 
 
@@ -120,3 +167,26 @@ class TokenStore:
     def exists(self) -> bool:
         """Check if tokens exist in storage."""
         return self.storage_path.exists()
+
+    def set_active_tenant(self, tenant_id: str) -> bool:
+        """Set the active tenant ID.
+
+        Args:
+            tenant_id: Tenant ID to set as active
+
+        Returns:
+            True if successful, False if tenant not found
+        """
+        tokens = self.load()
+        if not tokens:
+            return False
+
+        # Verify tenant exists in available tenants
+        if tokens.tenants:
+            valid_ids = [t.tenant_id for t in tokens.tenants]
+            if tenant_id not in valid_ids:
+                return False
+
+        tokens.tenant_id = tenant_id
+        self.save(tokens)
+        return True

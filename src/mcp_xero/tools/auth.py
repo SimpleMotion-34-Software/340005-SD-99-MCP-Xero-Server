@@ -67,6 +67,29 @@ AUTH_TOOLS = [
             "required": [],
         },
     ),
+    Tool(
+        name="xero_list_tenants",
+        description="List all Xero organizations (tenants) you have access to. Shows which one is currently active.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    Tool(
+        name="xero_set_tenant",
+        description="Switch to a different Xero organization (tenant). Use xero_list_tenants first to see available options.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "tenant_id": {
+                    "type": "string",
+                    "description": "The tenant ID to switch to (from xero_list_tenants)",
+                },
+            },
+            "required": ["tenant_id"],
+        },
+    ),
 ]
 
 
@@ -152,5 +175,40 @@ async def handle_auth_tool(name: str, arguments: dict[str, Any], oauth: XeroOAut
             "success": True,
             "message": "Disconnected from Xero. Stored tokens have been removed.",
         }
+
+    elif name == "xero_list_tenants":
+        tenants = oauth.list_tenants()
+        if not tenants:
+            return {
+                "tenants": [],
+                "message": "No tenants available. Connect to Xero first.",
+            }
+        return {
+            "tenants": tenants,
+            "count": len(tenants),
+            "message": f"Found {len(tenants)} organization(s)",
+        }
+
+    elif name == "xero_set_tenant":
+        tenant_id = arguments.get("tenant_id")
+        if not tenant_id:
+            return {"error": "tenant_id is required"}
+
+        success = oauth.set_active_tenant(tenant_id)
+        if success:
+            # Get the tenant name for confirmation
+            tenants = oauth.list_tenants()
+            active = next((t for t in tenants if t["id"] == tenant_id), None)
+            return {
+                "success": True,
+                "tenant_id": tenant_id,
+                "tenant_name": active["name"] if active else "Unknown",
+                "message": f"Switched to {active['name'] if active else tenant_id}",
+            }
+        else:
+            return {
+                "error": "Tenant not found",
+                "message": "Use xero_list_tenants to see available organizations",
+            }
 
     return {"error": f"Unknown auth tool: {name}"}

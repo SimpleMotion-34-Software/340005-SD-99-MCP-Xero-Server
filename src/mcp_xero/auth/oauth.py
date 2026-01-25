@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
 
-from .token_store import TokenSet, TokenStore
+from .token_store import Tenant, TokenSet, TokenStore
 
 
 def _get_keychain_password_macos(service: str) -> str | None:
@@ -300,8 +300,8 @@ class XeroOAuth:
 
                 data = await response.json()
 
-        # Get tenant ID from connections
-        tenant_id = await self._get_tenant_id(data["access_token"])
+        # Get all tenants from connections
+        tenant_id, tenants = await self._get_tenant_id(data["access_token"])
 
         tokens = TokenSet(
             access_token=data["access_token"],
@@ -310,6 +310,7 @@ class XeroOAuth:
             token_type=data["token_type"],
             scope=data.get("scope", "").split(),
             tenant_id=tenant_id,
+            tenants=tenants,
         )
 
         self.token_store.save(tokens)
@@ -374,8 +375,8 @@ class XeroOAuth:
 
                 data = await response.json()
 
-        # Get tenant ID from connections
-        tenant_id = await self._get_tenant_id(data["access_token"])
+        # Get all tenants from connections
+        tenant_id, tenants = await self._get_tenant_id(data["access_token"])
 
         tokens = TokenSet(
             access_token=data["access_token"],
@@ -384,6 +385,7 @@ class XeroOAuth:
             token_type=data["token_type"],
             scope=data.get("scope", "").split(),
             tenant_id=tenant_id,
+            tenants=tenants,
         )
 
         self.token_store.save(tokens)
@@ -428,6 +430,7 @@ class XeroOAuth:
             token_type=data["token_type"],
             scope=data.get("scope", "").split(),
             tenant_id=current.tenant_id,
+            tenants=current.tenants,  # Preserve existing tenants
         )
 
         self.token_store.save(tokens)
@@ -455,14 +458,14 @@ class XeroOAuth:
 
         return tokens
 
-    async def _get_tenant_id(self, access_token: str) -> str | None:
-        """Get tenant ID from Xero connections.
+    async def _get_all_tenants(self, access_token: str) -> list[Tenant]:
+        """Get all connected tenants from Xero.
 
         Args:
             access_token: Valid access token
 
         Returns:
-            Tenant ID of first connected organization
+            List of all connected tenants (organizations)
         """
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -470,13 +473,31 @@ class XeroOAuth:
                 headers={"Authorization": f"Bearer {access_token}"},
             ) as response:
                 if response.status != 200:
-                    return None
+                    return []
 
                 connections = await response.json()
-                if connections:
-                    return connections[0]["tenantId"]
+                return [
+                    Tenant(
+                        tenant_id=conn["tenantId"],
+                        tenant_name=conn.get("tenantName", "Unknown"),
+                        tenant_type=conn.get("tenantType", "ORGANISATION"),
+                    )
+                    for conn in connections
+                ]
 
-        return None
+    async def _get_tenant_id(self, access_token: str) -> tuple[str | None, list[Tenant]]:
+        """Get tenant ID and all tenants from Xero connections.
+
+        Args:
+            access_token: Valid access token
+
+        Returns:
+            Tuple of (first tenant ID, list of all tenants)
+        """
+        tenants = await self._get_all_tenants(access_token)
+        if tenants:
+            return tenants[0].tenant_id, tenants
+        return None, []
 
     async def start_callback_server(self) -> str:
         """Start local HTTP server to capture OAuth callback.
@@ -575,11 +596,58 @@ class XeroOAuth:
                 "message": "Not connected to Xero. Use xero_auth_url to begin authentication.",
             }
 
-        return {
+        # Build tenant info
+        active_tenant = tokens.active_tenant
+        tenant_count = len(tokens.tenants) if tokens.tenants else 1
+
+        status = {
             "connected": True,
             "configured": True,
             "expired": tokens.is_expired,
             "tenant_id": tokens.tenant_id,
+            "tenant_name": active_tenant.tenant_name if active_tenant else "Unknown",
+            "tenant_count": tenant_count,
             "scopes": tokens.scope,
-            "message": "Connected to Xero" + (" (token expired, will refresh)" if tokens.is_expired else ""),
+            "message": f"Connected to Xero ({active_tenant.tenant_name if active_tenant else 'Unknown'})"
+                + (" (token expired, will refresh)" if tokens.is_expired else ""),
         }
+
+        # Include all tenants if multiple
+        if tokens.tenants and len(tokens.tenants) > 1:
+            status["tenants"] = [
+                {"id": t.tenant_id, "name": t.tenant_name, "type": t.tenant_type}
+                for t in tokens.tenants
+            ]
+
+        return status
+
+    def list_tenants(self) -> list[dict[str, Any]]:
+        """List all available tenants.
+
+        Returns:
+            List of tenant info dictionaries
+        """
+        tokens = self.token_store.load()
+        if not tokens or not tokens.tenants:
+            return []
+
+        return [
+            {
+                "id": t.tenant_id,
+                "name": t.tenant_name,
+                "type": t.tenant_type,
+                "active": t.tenant_id == tokens.tenant_id,
+            }
+            for t in tokens.tenants
+        ]
+
+    def set_active_tenant(self, tenant_id: str) -> bool:
+        """Set the active tenant.
+
+        Args:
+            tenant_id: Tenant ID to set as active
+
+        Returns:
+            True if successful, False if tenant not found
+        """
+        return self.token_store.set_active_tenant(tenant_id)
