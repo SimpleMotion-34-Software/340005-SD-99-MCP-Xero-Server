@@ -4,7 +4,7 @@
 
 MCP Server for Xero integration, enabling Claude Code to manage contacts, quotes, and invoices through Xero's API.
 
-**Repository:** `SimpleMotion-34-Software/340001-ST-MCP-Xero`
+**Repository:** `SimpleMotion-34-Software/340005-SD-99-MCP-Xero-Server`
 
 ## Architecture
 

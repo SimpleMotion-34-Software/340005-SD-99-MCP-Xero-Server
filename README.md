@@ -31,8 +31,8 @@ A Model Context Protocol (MCP) server that integrates Claude Code with Xero for 
 ### Install from source
 
 ```bash
-git clone --recurse-submodules https://github.com/SimpleMotion-34-Software/340001-ST-MCP-Xero.git
-cd 340001-ST-MCP-Xero
+git clone --recurse-submodules https://github.com/SimpleMotion-34-Software/340005-SD-99-MCP-Xero-Server.git
+cd 340005-SD-99-MCP-Xero-Server
 pip install -e .
 ```
 
