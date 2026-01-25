@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 # Default short codes for known tenants
 DEFAULT_SHORT_CODES = {
     "SimpleMotion.Projects": "SP",
+    "SimpleMotion": "SM",
 }
 
 

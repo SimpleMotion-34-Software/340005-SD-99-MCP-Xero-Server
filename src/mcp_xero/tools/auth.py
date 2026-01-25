@@ -5,6 +5,7 @@ from typing import Any
 from mcp.types import Tool
 
 from ..auth import XeroOAuth
+from ..auth.oauth import get_active_profile, set_active_profile, list_profiles
 
 AUTH_TOOLS = [
     Tool(
@@ -88,6 +89,29 @@ AUTH_TOOLS = [
                 },
             },
             "required": ["tenant_id"],
+        },
+    ),
+    Tool(
+        name="xero_list_profiles",
+        description="List available Xero credential profiles. Each profile connects to a different Xero Custom Connection app.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    Tool(
+        name="xero_set_profile",
+        description="Switch to a different Xero credential profile (e.g., 'SP' for SimpleMotion.Projects, 'SM' for SimpleMotion). This changes which Xero app credentials are used.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string",
+                    "description": "The profile name to switch to (e.g., 'SP', 'SM')",
+                },
+            },
+            "required": ["profile"],
         },
     ),
 ]
@@ -211,6 +235,35 @@ async def handle_auth_tool(name: str, arguments: dict[str, Any], oauth: XeroOAut
             return {
                 "error": "Tenant not found",
                 "message": "Use xero_list_tenants to see available organizations",
+            }
+
+    elif name == "xero_list_profiles":
+        profiles = list_profiles()
+        return {
+            "profiles": profiles,
+            "active": get_active_profile(),
+            "message": f"Active profile: {get_active_profile()}",
+        }
+
+    elif name == "xero_set_profile":
+        profile = arguments.get("profile")
+        if not profile:
+            return {"error": "profile is required"}
+
+        success = set_active_profile(profile)
+        if success:
+            return {
+                "success": True,
+                "profile": get_active_profile(),
+                "message": f"Switched to profile: {get_active_profile()}. Use xero_connect to authenticate.",
+            }
+        else:
+            profiles = list_profiles()
+            available = [p["name"] for p in profiles]
+            return {
+                "error": f"Profile '{profile}' not found",
+                "available": available,
+                "message": f"Available profiles: {', '.join(available)}",
             }
 
     return {"error": f"Unknown auth tool: {name}"}

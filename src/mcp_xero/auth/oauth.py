@@ -6,6 +6,7 @@ import secrets
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -13,6 +14,62 @@ import aiohttp
 from aiohttp import web
 
 from .token_store import DEFAULT_SHORT_CODES, Tenant, TokenSet, TokenStore
+
+# Credential profiles for different Xero organizations
+# Maps profile name to keychain service suffix (empty = default)
+CREDENTIAL_PROFILES = {
+    "SP": "",           # SimpleMotion.Projects (default credentials)
+    "SM": "-sm",        # SimpleMotion (separate Custom Connection)
+}
+
+# Current active profile (module-level state)
+_active_profile: str = "SP"
+
+
+def get_active_profile() -> str:
+    """Get the current active credential profile."""
+    return _active_profile
+
+
+def set_active_profile(profile: str) -> bool:
+    """Set the active credential profile.
+
+    Args:
+        profile: Profile name (e.g., 'SP', 'SM')
+
+    Returns:
+        True if successful, False if profile not found
+    """
+    global _active_profile
+    profile_upper = profile.upper()
+    if profile_upper not in CREDENTIAL_PROFILES:
+        return False
+    _active_profile = profile_upper
+    return True
+
+
+def list_profiles() -> list[dict[str, Any]]:
+    """List all available credential profiles.
+
+    Returns:
+        List of profile info dictionaries
+    """
+    return [
+        {
+            "name": name,
+            "active": name == _active_profile,
+            "configured": _check_profile_configured(name),
+        }
+        for name in CREDENTIAL_PROFILES
+    ]
+
+
+def _check_profile_configured(profile: str) -> bool:
+    """Check if a profile has credentials configured."""
+    suffix = CREDENTIAL_PROFILES.get(profile.upper(), "")
+    client_id = _get_secure_credential(f"xero-client-id{suffix}")
+    client_secret = _get_secure_credential(f"xero-client-secret{suffix}")
+    return bool(client_id and client_secret)
 
 
 def _get_keychain_password_macos(service: str) -> str | None:
@@ -233,6 +290,7 @@ class XeroOAuth:
         client_secret: str | None = None,
         redirect_uri: str = "https://localhost:8742/callback",
         token_store: TokenStore | None = None,
+        profile: str | None = None,
     ):
         """Initialize OAuth handler.
 
@@ -241,26 +299,34 @@ class XeroOAuth:
             client_secret: Xero app client secret (defaults to keychain or XERO_CLIENT_SECRET env var)
             redirect_uri: OAuth redirect URI
             token_store: Token storage handler
+            profile: Credential profile to use (e.g., 'SP', 'SM'). Defaults to active profile.
 
         Credential lookup order:
             1. Explicit parameter
-            2. Platform secure storage:
-               - macOS: Keychain (xero-client-id, xero-client-secret)
-               - Windows: Credential Manager (xero-client-id, xero-client-secret)
+            2. Platform secure storage (profile-specific):
+               - macOS: Keychain (xero-client-id[-profile], xero-client-secret[-profile])
+               - Windows: Credential Manager
             3. Environment variable (XERO_CLIENT_ID, XERO_CLIENT_SECRET)
         """
+        # Use specified profile or active profile
+        self.profile = (profile or _active_profile).upper()
+        suffix = CREDENTIAL_PROFILES.get(self.profile, "")
+
         self.client_id = (
             client_id
-            or _get_secure_credential("xero-client-id")
+            or _get_secure_credential(f"xero-client-id{suffix}")
             or os.environ.get("XERO_CLIENT_ID", "")
         )
         self.client_secret = (
             client_secret
-            or _get_secure_credential("xero-client-secret")
+            or _get_secure_credential(f"xero-client-secret{suffix}")
             or os.environ.get("XERO_CLIENT_SECRET", "")
         )
         self.redirect_uri = redirect_uri
-        self.token_store = token_store or TokenStore()
+
+        # Use profile-specific token store
+        token_path = Path.home() / ".xero" / f"tokens{suffix}.enc"
+        self.token_store = token_store or TokenStore(storage_path=token_path)
         self._state: str | None = None
         self._callback_server: web.AppRunner | None = None
 
