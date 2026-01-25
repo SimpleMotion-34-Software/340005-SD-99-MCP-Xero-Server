@@ -13,6 +13,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
+# Default short codes for known tenants
+DEFAULT_SHORT_CODES = {
+    "SimpleMotion.Projects": "SP",
+}
+
+
 @dataclass
 class Tenant:
     """Xero tenant (organization) information."""
@@ -20,6 +26,7 @@ class Tenant:
     tenant_id: str
     tenant_name: str
     tenant_type: str  # "ORGANISATION" or "PRACTICE"
+    short_code: str | None = None  # Optional short code (e.g., "SP")
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -28,10 +35,12 @@ class Tenant:
     @classmethod
     def from_dict(cls, data: dict) -> Self:
         """Create from dictionary."""
+        tenant_name = data.get("tenant_name", "Unknown")
         return cls(
             tenant_id=data["tenant_id"],
-            tenant_name=data.get("tenant_name", "Unknown"),
+            tenant_name=tenant_name,
             tenant_type=data.get("tenant_type", "ORGANISATION"),
+            short_code=data.get("short_code") or DEFAULT_SHORT_CODES.get(tenant_name),
         )
 
 
@@ -168,11 +177,11 @@ class TokenStore:
         """Check if tokens exist in storage."""
         return self.storage_path.exists()
 
-    def set_active_tenant(self, tenant_id: str) -> bool:
-        """Set the active tenant ID.
+    def set_active_tenant(self, tenant_id_or_code: str) -> bool:
+        """Set the active tenant by ID or short code.
 
         Args:
-            tenant_id: Tenant ID to set as active
+            tenant_id_or_code: Tenant ID (UUID) or short code (e.g., "SP")
 
         Returns:
             True if successful, False if tenant not found
@@ -181,12 +190,20 @@ class TokenStore:
         if not tokens:
             return False
 
-        # Verify tenant exists in available tenants
+        # Find tenant by ID or short code
+        resolved_id = None
         if tokens.tenants:
-            valid_ids = [t.tenant_id for t in tokens.tenants]
-            if tenant_id not in valid_ids:
-                return False
+            for t in tokens.tenants:
+                if t.tenant_id == tenant_id_or_code:
+                    resolved_id = t.tenant_id
+                    break
+                if t.short_code and t.short_code.upper() == tenant_id_or_code.upper():
+                    resolved_id = t.tenant_id
+                    break
 
-        tokens.tenant_id = tenant_id
+        if not resolved_id:
+            return False
+
+        tokens.tenant_id = resolved_id
         self.save(tokens)
         return True

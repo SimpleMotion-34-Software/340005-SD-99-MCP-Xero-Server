@@ -78,13 +78,13 @@ AUTH_TOOLS = [
     ),
     Tool(
         name="xero_set_tenant",
-        description="Switch to a different Xero organization (tenant). Use xero_list_tenants first to see available options.",
+        description="Switch to a different Xero organization (tenant). Use xero_list_tenants first to see available options. Accepts tenant_id (UUID) or short_code (e.g., 'SP').",
         inputSchema={
             "type": "object",
             "properties": {
                 "tenant_id": {
                     "type": "string",
-                    "description": "The tenant ID to switch to (from xero_list_tenants)",
+                    "description": "The tenant ID (UUID) or short code (e.g., 'SP') to switch to",
                 },
             },
             "required": ["tenant_id"],
@@ -190,20 +190,22 @@ async def handle_auth_tool(name: str, arguments: dict[str, Any], oauth: XeroOAut
         }
 
     elif name == "xero_set_tenant":
-        tenant_id = arguments.get("tenant_id")
-        if not tenant_id:
+        tenant_id_or_code = arguments.get("tenant_id")
+        if not tenant_id_or_code:
             return {"error": "tenant_id is required"}
 
-        success = oauth.set_active_tenant(tenant_id)
+        success = oauth.set_active_tenant(tenant_id_or_code)
         if success:
-            # Get the tenant name for confirmation
+            # Get the tenant info for confirmation
             tenants = oauth.list_tenants()
-            active = next((t for t in tenants if t["id"] == tenant_id), None)
+            active = next((t for t in tenants if t["active"]), None)
+            short_code = f" ({active['short_code']})" if active and active.get("short_code") else ""
             return {
                 "success": True,
-                "tenant_id": tenant_id,
+                "tenant_id": active["id"] if active else tenant_id_or_code,
                 "tenant_name": active["name"] if active else "Unknown",
-                "message": f"Switched to {active['name'] if active else tenant_id}",
+                "short_code": active.get("short_code") if active else None,
+                "message": f"Switched to {active['name'] if active else tenant_id_or_code}{short_code}",
             }
         else:
             return {

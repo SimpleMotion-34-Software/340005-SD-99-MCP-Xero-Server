@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 import aiohttp
 from aiohttp import web
 
-from .token_store import Tenant, TokenSet, TokenStore
+from .token_store import DEFAULT_SHORT_CODES, Tenant, TokenSet, TokenStore
 
 
 def _get_keychain_password_macos(service: str) -> str | None:
@@ -476,14 +476,16 @@ class XeroOAuth:
                     return []
 
                 connections = await response.json()
-                return [
-                    Tenant(
+                tenants = []
+                for conn in connections:
+                    tenant_name = conn.get("tenantName", "Unknown")
+                    tenants.append(Tenant(
                         tenant_id=conn["tenantId"],
-                        tenant_name=conn.get("tenantName", "Unknown"),
+                        tenant_name=tenant_name,
                         tenant_type=conn.get("tenantType", "ORGANISATION"),
-                    )
-                    for conn in connections
-                ]
+                        short_code=DEFAULT_SHORT_CODES.get(tenant_name),
+                    ))
+                return tenants
 
     async def _get_tenant_id(self, access_token: str) -> tuple[str | None, list[Tenant]]:
         """Get tenant ID and all tenants from Xero connections.
@@ -636,6 +638,7 @@ class XeroOAuth:
                 "id": t.tenant_id,
                 "name": t.tenant_name,
                 "type": t.tenant_type,
+                "short_code": t.short_code,
                 "active": t.tenant_id == tokens.tenant_id,
             }
             for t in tokens.tenants
