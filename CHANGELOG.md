@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.6] - 2026-01-25
+
+### Added
+- Multi-profile credential support for multiple Xero Custom Connection apps
+- CREDENTIAL_PROFILES mapping (SP = SimpleMotion.Projects, SM = SimpleMotion)
+- `xero_list_profiles` and `xero_set_profile` tools to switch between profiles
+- Each profile uses separate token storage (tokens.enc, tokens-sm.enc)
+- SimpleMotion short code (SM) added to DEFAULT_SHORT_CODES
+
 ## [0.0.1.5] - 2026-01-25
 
 ### Fixed
