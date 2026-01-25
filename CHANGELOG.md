@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.5] - 2026-01-25
+
+### Fixed
+- Add missing `__main__.py` to enable `python -m mcp_xero` execution
+
 ## [0.0.1.4] - 2026-01-25
 
 ### Added
