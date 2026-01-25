@@ -17,6 +17,15 @@ AUTH_TOOLS = [
         },
     ),
     Tool(
+        name="xero_connect",
+        description="Connect to Xero using client credentials (for Custom Connection apps). This authenticates directly without requiring browser interaction. Use this for Xero apps configured as 'Custom Connection' type.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    ),
+    Tool(
         name="xero_auth_url",
         description="Get the OAuth authorization URL to connect to Xero. Open this URL in a browser to authorize the connection. After authorizing, Xero will redirect to a local callback URL where the authorization code will be captured automatically.",
         inputSchema={
@@ -74,6 +83,24 @@ async def handle_auth_tool(name: str, arguments: dict[str, Any], oauth: XeroOAut
     """
     if name == "xero_auth_status":
         return oauth.get_status()
+
+    elif name == "xero_connect":
+        if not oauth.is_configured:
+            return {
+                "error": "Xero credentials not configured",
+                "message": "Set XERO_CLIENT_ID and XERO_CLIENT_SECRET environment variables",
+            }
+
+        try:
+            tokens = await oauth.authenticate_client_credentials()
+            return {
+                "success": True,
+                "message": "Successfully connected to Xero using client credentials",
+                "tenant_id": tokens.tenant_id,
+                "scopes": tokens.scope,
+            }
+        except ValueError as e:
+            return {"error": str(e)}
 
     elif name == "xero_auth_url":
         if not oauth.is_configured:

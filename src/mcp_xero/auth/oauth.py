@@ -36,7 +36,7 @@ class XeroOAuth:
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
-        redirect_uri: str = "http://localhost:8742/callback",
+        redirect_uri: str = "https://localhost:8742/callback",
         token_store: TokenStore | None = None,
     ):
         """Initialize OAuth handler.
@@ -58,6 +58,52 @@ class XeroOAuth:
     def is_configured(self) -> bool:
         """Check if OAuth credentials are configured."""
         return bool(self.client_id and self.client_secret)
+
+    async def authenticate_client_credentials(self) -> TokenSet:
+        """Authenticate using client credentials grant (for Custom Connections).
+
+        This is used for Xero Custom Connection apps which are pre-authorized
+        to a specific organization and don't require user interaction.
+
+        Returns:
+            Token set with access token
+
+        Raises:
+            ValueError: If credentials not configured or auth fails
+        """
+        if not self.is_configured:
+            raise ValueError("XERO_CLIENT_ID and XERO_CLIENT_SECRET must be set")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                XERO_TOKEN_URL,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            ) as response:
+                if response.status != 200:
+                    error = await response.text()
+                    raise ValueError(f"Client credentials auth failed: {error}")
+
+                data = await response.json()
+
+        # Get tenant ID from connections
+        tenant_id = await self._get_tenant_id(data["access_token"])
+
+        tokens = TokenSet(
+            access_token=data["access_token"],
+            refresh_token=data.get("refresh_token", ""),  # May not have refresh token
+            expires_at=datetime.now().timestamp() + data["expires_in"],
+            token_type=data["token_type"],
+            scope=data.get("scope", "").split(),
+            tenant_id=tenant_id,
+        )
+
+        self.token_store.save(tokens)
+        return tokens
 
     def get_authorization_url(self, scopes: list[str] | None = None) -> tuple[str, str]:
         """Generate authorization URL for user to visit.
@@ -189,7 +235,11 @@ class XeroOAuth:
 
         if tokens.is_expired:
             try:
-                tokens = await self.refresh_tokens()
+                # If no refresh token (Custom Connection), re-authenticate
+                if not tokens.refresh_token:
+                    tokens = await self.authenticate_client_credentials()
+                else:
+                    tokens = await self.refresh_tokens()
             except ValueError:
                 return None
 
