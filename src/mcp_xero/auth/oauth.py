@@ -15,7 +15,7 @@ from aiohttp import web
 from .token_store import TokenSet, TokenStore
 
 
-def _get_keychain_password(service: str) -> str | None:
+def _get_keychain_password_macos(service: str) -> str | None:
     """Retrieve password from macOS Keychain.
 
     Args:
@@ -24,9 +24,6 @@ def _get_keychain_password(service: str) -> str | None:
     Returns:
         Password if found, None otherwise
     """
-    if sys.platform != "darwin":
-        return None
-
     try:
         result = subprocess.run(
             ["security", "find-generic-password", "-s", service, "-w"],
@@ -39,6 +36,146 @@ def _get_keychain_password(service: str) -> str | None:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
+    return None
+
+
+def _get_credential_password_windows(target: str) -> str | None:
+    """Retrieve password from Windows Credential Manager.
+
+    Args:
+        target: Credential target name
+
+    Returns:
+        Password if found, None otherwise
+    """
+    # PowerShell script to retrieve credential
+    ps_script = f'''
+    $cred = Get-StoredCredential -Target "{target}" -ErrorAction SilentlyContinue
+    if ($cred) {{
+        $cred.GetNetworkCredential().Password
+    }}
+    '''
+
+    # Try using cmdkey first (built-in, doesn't require CredentialManager module)
+    # Format: cmdkey /list shows credentials, but can't retrieve passwords directly
+    # Use PowerShell with .NET instead
+    ps_script_dotnet = f'''
+    Add-Type -AssemblyName System.Security
+    $target = "{target}"
+    try {{
+        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
+        $vault = New-Object Windows.Security.Credentials.PasswordVault
+        $cred = $vault.Retrieve("xero-mcp", $target)
+        $cred.RetrievePassword()
+        Write-Output $cred.Password
+    }} catch {{
+        # Fallback: try generic credential
+        $sig = @"
+[DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern bool CredRead(string target, int type, int flags, out IntPtr credential);
+[DllImport("advapi32.dll")]
+public static extern void CredFree(IntPtr credential);
+"@
+        try {{
+            Add-Type -MemberDefinition $sig -Namespace Win32 -Name Cred
+            $ptr = [IntPtr]::Zero
+            if ([Win32.Cred]::CredRead($target, 1, 0, [ref]$ptr)) {{
+                $cred = [Runtime.InteropServices.Marshal]::PtrToStructure($ptr, [Type][Win32.Cred+CREDENTIAL])
+                $secret = [Runtime.InteropServices.Marshal]::PtrToStringUni($cred.CredentialBlob, $cred.CredentialBlobSize / 2)
+                [Win32.Cred]::CredFree($ptr)
+                Write-Output $secret
+            }}
+        }} catch {{}}
+    }}
+    '''
+
+    try:
+        # Simple approach: use cmdkey-style generic credentials via PowerShell
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                f'''
+                $ErrorActionPreference = "SilentlyContinue"
+                $cred = cmdkey /list:"{target}" 2>$null
+                if ($LASTEXITCODE -eq 0) {{
+                    # Can't get password from cmdkey, try .NET CredentialManager
+                    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class CredManager {{
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    public static extern bool CredRead(string target, int type, int flags, out IntPtr credential);
+
+    [DllImport("advapi32.dll")]
+    public static extern void CredFree(IntPtr credential);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct CREDENTIAL {{
+        public int Flags;
+        public int Type;
+        public string TargetName;
+        public string Comment;
+        public long LastWritten;
+        public int CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public int Persist;
+        public int AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }}
+
+    public static string GetPassword(string target) {{
+        IntPtr ptr;
+        if (CredRead(target, 1, 0, out ptr)) {{
+            CREDENTIAL cred = (CREDENTIAL)Marshal.PtrToStructure(ptr, typeof(CREDENTIAL));
+            string password = Marshal.PtrToStringUni(cred.CredentialBlob, cred.CredentialBlobSize / 2);
+            CredFree(ptr);
+            return password;
+        }}
+        return null;
+    }}
+}}
+"@
+                    $password = [CredManager]::GetPassword("{target}")
+                    if ($password) {{ Write-Output $password }}
+                }}
+                ''',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None
+
+
+def _get_secure_credential(name: str) -> str | None:
+    """Retrieve credential from platform-specific secure storage.
+
+    Args:
+        name: Credential name (e.g., 'xero-client-id')
+
+    Returns:
+        Credential value if found, None otherwise
+
+    Platform support:
+        - macOS: Keychain (security command)
+        - Windows: Credential Manager (PowerShell)
+        - Linux: Not yet implemented (returns None)
+    """
+    if sys.platform == "darwin":
+        return _get_keychain_password_macos(name)
+    elif sys.platform == "win32":
+        return _get_credential_password_windows(name)
+    # Linux: could add libsecret/keyring support later
     return None
 
 # Xero OAuth endpoints
@@ -78,17 +215,19 @@ class XeroOAuth:
 
         Credential lookup order:
             1. Explicit parameter
-            2. macOS Keychain (xero-client-id, xero-client-secret)
+            2. Platform secure storage:
+               - macOS: Keychain (xero-client-id, xero-client-secret)
+               - Windows: Credential Manager (xero-client-id, xero-client-secret)
             3. Environment variable (XERO_CLIENT_ID, XERO_CLIENT_SECRET)
         """
         self.client_id = (
             client_id
-            or _get_keychain_password("xero-client-id")
+            or _get_secure_credential("xero-client-id")
             or os.environ.get("XERO_CLIENT_ID", "")
         )
         self.client_secret = (
             client_secret
-            or _get_keychain_password("xero-client-secret")
+            or _get_secure_credential("xero-client-secret")
             or os.environ.get("XERO_CLIENT_SECRET", "")
         )
         self.redirect_uri = redirect_uri
