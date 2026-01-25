@@ -3,6 +3,8 @@
 import asyncio
 import os
 import secrets
+import subprocess
+import sys
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -11,6 +13,33 @@ import aiohttp
 from aiohttp import web
 
 from .token_store import TokenSet, TokenStore
+
+
+def _get_keychain_password(service: str) -> str | None:
+    """Retrieve password from macOS Keychain.
+
+    Args:
+        service: Keychain service name
+
+    Returns:
+        Password if found, None otherwise
+    """
+    if sys.platform != "darwin":
+        return None
+
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None
 
 # Xero OAuth endpoints
 XERO_AUTH_URL = "https://login.xero.com/identity/connect/authorize"
@@ -42,13 +71,26 @@ class XeroOAuth:
         """Initialize OAuth handler.
 
         Args:
-            client_id: Xero app client ID (defaults to XERO_CLIENT_ID env var)
-            client_secret: Xero app client secret (defaults to XERO_CLIENT_SECRET env var)
+            client_id: Xero app client ID (defaults to keychain or XERO_CLIENT_ID env var)
+            client_secret: Xero app client secret (defaults to keychain or XERO_CLIENT_SECRET env var)
             redirect_uri: OAuth redirect URI
             token_store: Token storage handler
+
+        Credential lookup order:
+            1. Explicit parameter
+            2. macOS Keychain (xero-client-id, xero-client-secret)
+            3. Environment variable (XERO_CLIENT_ID, XERO_CLIENT_SECRET)
         """
-        self.client_id = client_id or os.environ.get("XERO_CLIENT_ID", "")
-        self.client_secret = client_secret or os.environ.get("XERO_CLIENT_SECRET", "")
+        self.client_id = (
+            client_id
+            or _get_keychain_password("xero-client-id")
+            or os.environ.get("XERO_CLIENT_ID", "")
+        )
+        self.client_secret = (
+            client_secret
+            or _get_keychain_password("xero-client-secret")
+            or os.environ.get("XERO_CLIENT_SECRET", "")
+        )
         self.redirect_uri = redirect_uri
         self.token_store = token_store or TokenStore()
         self._state: str | None = None
