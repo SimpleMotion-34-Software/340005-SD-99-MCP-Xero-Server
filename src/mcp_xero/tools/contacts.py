@@ -47,6 +47,20 @@ CONTACT_TOOLS = [
         },
     ),
     Tool(
+        name="xero_find_contact",
+        description="Find a contact by name. Returns the best matching contact, preferring exact matches. Useful for getting a contact ID when you only know the name.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Contact name to search for (partial match supported)",
+                },
+            },
+            "required": ["name"],
+        },
+    ),
+    Tool(
         name="xero_create_contact",
         description="Create a new contact in Xero. At minimum, a name is required.",
         inputSchema={
@@ -114,6 +128,23 @@ async def handle_contact_tool(name: str, arguments: dict[str, Any], client: Xero
                     for c in contacts
                 ],
                 "count": len(contacts),
+            }
+
+        elif name == "xero_find_contact":
+            contact = await client.find_contact_by_name(arguments["name"])
+            if not contact:
+                return {
+                    "found": False,
+                    "message": f"No contact found matching '{arguments['name']}'",
+                }
+            return {
+                "found": True,
+                "contact": {
+                    "id": contact.get("ContactID"),
+                    "name": contact.get("Name"),
+                    "email": contact.get("EmailAddress"),
+                    "status": contact.get("ContactStatus"),
+                },
             }
 
         elif name == "xero_get_contact":

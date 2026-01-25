@@ -56,13 +56,17 @@ QUOTE_TOOLS = [
     ),
     Tool(
         name="xero_create_quote",
-        description="Create a new quote in Xero for a contact with line items.",
+        description="Create a new quote in Xero for a contact with line items. You can specify either contact_id or contact_name (contact_name will search for the contact).",
         inputSchema={
             "type": "object",
             "properties": {
                 "contact_id": {
                     "type": "string",
-                    "description": "Contact ID to create the quote for",
+                    "description": "Contact ID to create the quote for (use this OR contact_name)",
+                },
+                "contact_name": {
+                    "type": "string",
+                    "description": "Contact name to search for (use this OR contact_id)",
                 },
                 "line_items": {
                     "type": "array",
@@ -125,7 +129,7 @@ QUOTE_TOOLS = [
                     "default": "AUD",
                 },
             },
-            "required": ["contact_id", "line_items"],
+            "required": ["line_items"],
         },
     ),
     Tool(
@@ -304,9 +308,19 @@ async def handle_quote_tool(name: str, arguments: dict[str, Any], client: XeroCl
             }
 
         elif name == "xero_create_quote":
+            # Resolve contact_id from contact_name if provided
+            contact_id = arguments.get("contact_id")
+            if not contact_id and arguments.get("contact_name"):
+                contact = await client.find_contact_by_name(arguments["contact_name"])
+                if not contact:
+                    return {"error": f"No contact found matching '{arguments['contact_name']}'"}
+                contact_id = contact["ContactID"]
+            if not contact_id:
+                return {"error": "Either contact_id or contact_name is required"}
+
             line_items = _format_line_items(arguments.get("line_items", []))
             quote = await client.create_quote(
-                contact_id=arguments["contact_id"],
+                contact_id=contact_id,
                 line_items=line_items,
                 date=arguments.get("date"),
                 expiry_date=arguments.get("expiry_date"),

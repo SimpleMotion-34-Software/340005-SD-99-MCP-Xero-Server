@@ -40,6 +40,40 @@ class XeroClient:
         self.oauth = oauth
         self._request_times: list[float] = []
 
+    def _parse_error_message(self, error_text: str) -> str:
+        """Parse Xero API error into readable message.
+
+        Args:
+            error_text: Raw error response text
+
+        Returns:
+            Human-readable error message
+        """
+        import json
+        try:
+            error_data = json.loads(error_text)
+
+            # Handle validation exceptions
+            if error_data.get("Type") == "ValidationException":
+                messages = []
+                for element in error_data.get("Elements", []):
+                    for err in element.get("ValidationErrors", []):
+                        messages.append(err.get("Message", "Unknown validation error"))
+                if messages:
+                    return "Validation error: " + "; ".join(messages)
+
+            # Handle general errors
+            if "Message" in error_data:
+                return f"Xero error: {error_data['Message']}"
+
+            if "Detail" in error_data:
+                return f"Xero error: {error_data['Detail']}"
+
+        except json.JSONDecodeError:
+            pass
+
+        return f"Xero API error: {error_text[:200]}"
+
     async def _check_rate_limit(self) -> None:
         """Check and enforce rate limiting."""
         now = datetime.now().timestamp()
@@ -112,8 +146,10 @@ class XeroClient:
                     # Handle other errors
                     if response.status >= 400:
                         error_text = await response.text()
+                        # Try to parse validation errors into readable format
+                        user_message = self._parse_error_message(error_text)
                         raise XeroAPIError(
-                            f"Xero API error: {error_text}",
+                            user_message,
                             status_code=response.status,
                             details=error_text,
                         )
@@ -143,11 +179,11 @@ class XeroClient:
         params: dict[str, Any] = {"page": page}
 
         if search:
-            params["where"] = f'Name.Contains("{search}")'
+            # Use Xero's searchTerm parameter for name searching
+            params["searchTerm"] = search
 
         if not include_archived:
-            params["where"] = params.get("where", "") + " AND ContactStatus!=\"ARCHIVED\""
-            params["where"] = params["where"].lstrip(" AND ")
+            params["where"] = 'ContactStatus!="ARCHIVED"'
 
         response = await self._request("GET", "Contacts", params=params)
         return response.get("Contacts", [])
@@ -165,6 +201,35 @@ class XeroClient:
         contacts = response.get("Contacts", [])
         if not contacts:
             raise XeroAPIError(f"Contact not found: {contact_id}", status_code=404)
+        return contacts[0]
+
+    async def search_contacts(self, name: str) -> list[dict[str, Any]]:
+        """Search contacts by name.
+
+        Args:
+            name: Name to search for (partial match)
+
+        Returns:
+            List of matching contacts
+        """
+        return await self.list_contacts(search=name)
+
+    async def find_contact_by_name(self, name: str) -> dict[str, Any] | None:
+        """Find a single contact by exact or partial name match.
+
+        Args:
+            name: Contact name to find
+
+        Returns:
+            Contact if found, None otherwise
+        """
+        contacts = await self.search_contacts(name)
+        if not contacts:
+            return None
+        # Return exact match if found, otherwise first partial match
+        for contact in contacts:
+            if contact.get("Name", "").lower() == name.lower():
+                return contact
         return contacts[0]
 
     async def create_contact(
@@ -300,10 +365,8 @@ class XeroClient:
             "LineItems": line_items,
             "CurrencyCode": currency_code,
             "Status": "DRAFT",
+            "Date": date or datetime.now().strftime("%Y-%m-%d"),
         }
-
-        if date:
-            quote["Date"] = date
         if expiry_date:
             quote["ExpiryDate"] = expiry_date
         if quote_number:
@@ -333,6 +396,9 @@ class XeroClient:
     ) -> dict[str, Any]:
         """Update an existing quote.
 
+        Fetches existing quote data and merges with provided updates to ensure
+        required fields (Contact, Date) are preserved.
+
         Args:
             quote_id: Quote ID to update
             status: New status (DRAFT, SENT, ACCEPTED, DECLINED)
@@ -346,21 +412,36 @@ class XeroClient:
         Returns:
             Updated quote
         """
-        quote: dict[str, Any] = {"QuoteID": quote_id}
+        # Fetch existing quote to preserve required fields
+        existing = await self.get_quote(quote_id)
 
+        # Build update payload with required fields
+        quote: dict[str, Any] = {
+            "QuoteID": quote_id,
+            "Contact": {"ContactID": existing["Contact"]["ContactID"]},
+            "Date": existing.get("DateString", "")[:10] if existing.get("DateString") else datetime.now().strftime("%Y-%m-%d"),
+        }
+
+        # Only include fields that are being updated or need to be preserved
         if status:
             quote["Status"] = status
-        if line_items:
+
+        if line_items is not None:
             quote["LineItems"] = line_items
+
         if expiry_date:
             quote["ExpiryDate"] = expiry_date
-        if reference:
+
+        if reference is not None:
             quote["Reference"] = reference
-        if terms:
+
+        if terms is not None:
             quote["Terms"] = terms
-        if title:
+
+        if title is not None:
             quote["Title"] = title
-        if summary:
+
+        if summary is not None:
             quote["Summary"] = summary
 
         response = await self._request("POST", "Quotes", data={"Quotes": [quote]})
@@ -475,10 +556,8 @@ class XeroClient:
             "LineItems": line_items,
             "CurrencyCode": currency_code,
             "Status": status,
+            "Date": date or datetime.now().strftime("%Y-%m-%d"),
         }
-
-        if date:
-            invoice["Date"] = date
         if due_date:
             invoice["DueDate"] = due_date
         if invoice_number:
@@ -499,6 +578,9 @@ class XeroClient:
     ) -> dict[str, Any]:
         """Update an existing invoice.
 
+        Fetches existing invoice data and merges with provided updates to ensure
+        required fields (Contact, Date, Type) are preserved.
+
         Args:
             invoice_id: Invoice ID to update
             status: New status (DRAFT, SUBMITTED, AUTHORISED, VOIDED)
@@ -509,19 +591,74 @@ class XeroClient:
         Returns:
             Updated invoice
         """
-        invoice: dict[str, Any] = {"InvoiceID": invoice_id}
+        # Fetch existing invoice to preserve required fields
+        existing = await self.get_invoice(invoice_id)
 
+        # Build update payload with required fields
+        invoice: dict[str, Any] = {
+            "InvoiceID": invoice_id,
+            "Type": existing.get("Type"),
+            "Contact": {"ContactID": existing["Contact"]["ContactID"]},
+            "Date": existing.get("DateString", "")[:10] if existing.get("DateString") else datetime.now().strftime("%Y-%m-%d"),
+        }
+
+        # Only include fields that are being updated
         if status:
             invoice["Status"] = status
-        if line_items:
+
+        if line_items is not None:
             invoice["LineItems"] = line_items
+
         if due_date:
             invoice["DueDate"] = due_date
-        if reference:
+
+        if reference is not None:
             invoice["Reference"] = reference
 
         response = await self._request("POST", "Invoices", data={"Invoices": [invoice]})
         return response.get("Invoices", [{}])[0]
+
+    async def void_invoice(self, invoice_id: str) -> dict[str, Any]:
+        """Void an invoice.
+
+        The invoice must be in AUTHORISED or SUBMITTED status to be voided.
+        DRAFT invoices should be deleted instead.
+
+        Args:
+            invoice_id: Invoice ID to void
+
+        Returns:
+            Voided invoice
+        """
+        return await self.update_invoice(invoice_id, status="VOIDED")
+
+    async def delete_invoice(self, invoice_id: str) -> dict[str, Any]:
+        """Delete a draft invoice.
+
+        Only DRAFT invoices can be deleted. Use void_invoice for
+        AUTHORISED or SUBMITTED invoices.
+
+        Args:
+            invoice_id: Invoice ID to delete (must be DRAFT status)
+
+        Returns:
+            Deletion confirmation
+        """
+        # First verify it's a draft
+        invoice = await self.get_invoice(invoice_id)
+        if invoice.get("Status") != "DRAFT":
+            raise XeroAPIError(
+                f"Only DRAFT invoices can be deleted. Status is: {invoice.get('Status')}. Use void_invoice instead.",
+                status_code=400,
+            )
+
+        # Update to DELETED status
+        invoice_data: dict[str, Any] = {
+            "InvoiceID": invoice_id,
+            "Status": "DELETED",
+        }
+        response = await self._request("POST", "Invoices", data={"Invoices": [invoice_data]})
+        return {"success": True, "message": f"Invoice {invoice.get('InvoiceNumber')} deleted"}
 
     async def send_invoice(self, invoice_id: str) -> dict[str, Any]:
         """Send invoice via email.

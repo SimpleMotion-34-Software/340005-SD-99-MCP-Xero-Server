@@ -62,13 +62,17 @@ INVOICE_TOOLS = [
     ),
     Tool(
         name="xero_create_invoice",
-        description="Create a new invoice in Xero for a contact with line items.",
+        description="Create a new invoice in Xero for a contact with line items. You can specify either contact_id or contact_name (contact_name will search for the contact).",
         inputSchema={
             "type": "object",
             "properties": {
                 "contact_id": {
                     "type": "string",
-                    "description": "Contact ID to create the invoice for",
+                    "description": "Contact ID to create the invoice for (use this OR contact_name)",
+                },
+                "contact_name": {
+                    "type": "string",
+                    "description": "Contact name to search for (use this OR contact_id)",
                 },
                 "line_items": {
                     "type": "array",
@@ -135,7 +139,7 @@ INVOICE_TOOLS = [
                     "default": "DRAFT",
                 },
             },
-            "required": ["contact_id", "line_items"],
+            "required": ["line_items"],
         },
     ),
     Tool(
@@ -189,6 +193,34 @@ INVOICE_TOOLS = [
                 "invoice_id": {
                     "type": "string",
                     "description": "Invoice ID to send",
+                },
+            },
+            "required": ["invoice_id"],
+        },
+    ),
+    Tool(
+        name="xero_void_invoice",
+        description="Void an invoice. The invoice must be in AUTHORISED or SUBMITTED status. Use xero_delete_invoice for DRAFT invoices instead.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "invoice_id": {
+                    "type": "string",
+                    "description": "Invoice ID to void",
+                },
+            },
+            "required": ["invoice_id"],
+        },
+    ),
+    Tool(
+        name="xero_delete_invoice",
+        description="Delete a DRAFT invoice. Only invoices in DRAFT status can be deleted. Use xero_void_invoice for AUTHORISED or SUBMITTED invoices.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "invoice_id": {
+                    "type": "string",
+                    "description": "Invoice ID to delete (must be DRAFT status)",
                 },
             },
             "required": ["invoice_id"],
@@ -299,9 +331,19 @@ async def handle_invoice_tool(name: str, arguments: dict[str, Any], client: Xero
             }
 
         elif name == "xero_create_invoice":
+            # Resolve contact_id from contact_name if provided
+            contact_id = arguments.get("contact_id")
+            if not contact_id and arguments.get("contact_name"):
+                contact = await client.find_contact_by_name(arguments["contact_name"])
+                if not contact:
+                    return {"error": f"No contact found matching '{arguments['contact_name']}'"}
+                contact_id = contact["ContactID"]
+            if not contact_id:
+                return {"error": "Either contact_id or contact_name is required"}
+
             line_items = _format_line_items(arguments.get("line_items", []))
             invoice = await client.create_invoice(
-                contact_id=arguments["contact_id"],
+                contact_id=contact_id,
                 line_items=line_items,
                 invoice_type=arguments.get("invoice_type", "ACCREC"),
                 date=arguments.get("date"),
@@ -351,6 +393,22 @@ async def handle_invoice_tool(name: str, arguments: dict[str, Any], client: Xero
                 "success": True,
                 "message": "Invoice sent to contact via email",
             }
+
+        elif name == "xero_void_invoice":
+            invoice = await client.void_invoice(arguments["invoice_id"])
+            return {
+                "success": True,
+                "invoice": {
+                    "id": invoice.get("InvoiceID"),
+                    "number": invoice.get("InvoiceNumber"),
+                    "status": invoice.get("Status"),
+                },
+                "message": f"Invoice {invoice.get('InvoiceNumber')} voided successfully",
+            }
+
+        elif name == "xero_delete_invoice":
+            result = await client.delete_invoice(arguments["invoice_id"])
+            return result
 
     except Exception as e:
         return {"error": str(e)}
