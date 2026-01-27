@@ -12,10 +12,10 @@ import aiohttp
 from .token_store import DEFAULT_SHORT_CODES, Tenant, TokenSet, TokenStore
 
 # Credential profiles for different Xero organizations
-# Maps profile name to keychain service suffix (empty = default)
+# Maps profile name to keychain service suffix
 CREDENTIAL_PROFILES = {
-    "SP": "",           # SimpleMotion.Projects (default credentials)
-    "SM": "-sm",        # SimpleMotion (separate Custom Connection)
+    "SP": "-sp",        # SimpleMotion.Projects
+    "SM": "-sm",        # SimpleMotion
 }
 
 # Current active profile (module-level state)
