@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.10] - 2026-01-27
+
+### Added
+- OTE (Ordinary Time Earnings) calculation in quarterly wages report
+- Allowance detection and exclusion from super calculations
+- Per diem allowances identified and separated from OTE
+
+### Changed
+- Super percentage now calculated on OTE, not gross wages
+- Date format changed to DD-MM-YYYY (Australian format)
+- Numeric columns right-aligned in markdown table output
+
 ## [0.0.1.8] - 2026-01-27
 
 ### Added
