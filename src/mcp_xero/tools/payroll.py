@@ -192,53 +192,72 @@ async def _build_employee_lookup(client: XeroClient) -> dict[str, str]:
     return lookup
 
 
-async def _build_allowance_rate_ids(client: XeroClient) -> set[str]:
-    """Build a set of earnings rate IDs that are allowances (not OTE).
+async def _build_earnings_rate_categories(client: XeroClient) -> tuple[set[str], set[str]]:
+    """Build sets of earnings rate IDs for allowances and overtime.
 
     Args:
         client: Xero API client
 
     Returns:
-        Set of EarningsRateID values for allowances/per diems
+        Tuple of (allowance_ids, overtime_ids)
     """
     response = await client._payroll_request("GET", "PayItems")
     earnings_rates = response.get("PayItems", {}).get("EarningsRates", [])
 
     allowance_ids = set()
+    overtime_ids = set()
+
     for er in earnings_rates:
         name = er.get("Name", "").lower()
         earnings_type = er.get("EarningsType", "")
+        rate_id = er.get("EarningsRateID", "")
+
         # Identify allowances and per diems (not subject to super)
         if earnings_type == "ALLOWANCE" or "per diem" in name or "allowance" in name:
-            allowance_ids.add(er.get("EarningsRateID", ""))
+            allowance_ids.add(rate_id)
+        # Identify overtime earnings
+        elif earnings_type == "OVERTIME" or "overtime" in name or "over time" in name or "ot " in name:
+            overtime_ids.add(rate_id)
 
-    return allowance_ids
+    return allowance_ids, overtime_ids
 
 
-async def _get_payslip_allowances(client: XeroClient, payslip_id: str, allowance_rate_ids: set[str]) -> float:
-    """Get total allowances from a detailed payslip.
+async def _get_payslip_earnings_breakdown(
+    client: XeroClient,
+    payslip_id: str,
+    allowance_rate_ids: set[str],
+    overtime_rate_ids: set[str],
+) -> tuple[float, float]:
+    """Get allowances and overtime from a detailed payslip.
 
     Args:
         client: Xero API client
         payslip_id: Payslip ID to fetch
         allowance_rate_ids: Set of earnings rate IDs that are allowances
+        overtime_rate_ids: Set of earnings rate IDs that are overtime
 
     Returns:
-        Total allowance amount for the payslip
+        Tuple of (total_allowances, total_overtime)
     """
     response = await client._payroll_request("GET", f"Payslip/{payslip_id}")
     payslip = response.get("Payslip", {})
 
     total_allowances = 0.0
-    for el in payslip.get("EarningsLines", []):
-        if el.get("EarningsRateID", "") in allowance_rate_ids:
-            units = float(el.get("NumberOfUnits", 0) or 0)
-            rate = float(el.get("RatePerUnit", 0) or 0)
-            fixed = float(el.get("FixedAmount", 0) or 0)
-            amount = fixed if fixed else (units * rate)
-            total_allowances += amount
+    total_overtime = 0.0
 
-    return total_allowances
+    for el in payslip.get("EarningsLines", []):
+        rate_id = el.get("EarningsRateID", "")
+        units = float(el.get("NumberOfUnits", 0) or 0)
+        rate = float(el.get("RatePerUnit", 0) or 0)
+        fixed = float(el.get("FixedAmount", 0) or 0)
+        amount = fixed if fixed else (units * rate)
+
+        if rate_id in allowance_rate_ids:
+            total_allowances += amount
+        elif rate_id in overtime_rate_ids:
+            total_overtime += amount
+
+    return total_allowances, total_overtime
 
 
 async def _run_quarterly_report_single(
@@ -286,17 +305,20 @@ async def _run_quarterly_report_single(
             "total_wages": 0,
             "total_allowances": 0,
             "total_ote": 0,
+            "total_overtime": 0,
+            "total_tax": 0,
             "total_super": 0,
             "employees": [],
         }
 
     # Build lookups
     employee_lookup = await _build_employee_lookup(client)
-    allowance_rate_ids = await _build_allowance_rate_ids(client)
+    allowance_rate_ids, overtime_rate_ids = await _build_earnings_rate_categories(client)
 
-    # Aggregate wages, allowances and super by employee
+    # Aggregate wages, allowances, overtime, tax and super by employee
     employee_data: dict[str, dict[str, float]] = {}
     total_allowances = 0.0
+    total_overtime = 0.0
 
     for pr in filtered_payruns:
         full_payrun = await client.get_payrun(pr["PayRunID"])
@@ -304,10 +326,14 @@ async def _run_quarterly_report_single(
             emp_id = payslip.get("EmployeeID", "")
             payslip_id = payslip.get("PayslipID", "")
             wages = float(payslip.get("Wages", 0) or 0)
+            tax_amt = float(payslip.get("Tax", 0) or 0)
             super_amt = float(payslip.get("Super", 0) or 0)
 
-            allowances = await _get_payslip_allowances(client, payslip_id, allowance_rate_ids)
+            allowances, overtime = await _get_payslip_earnings_breakdown(
+                client, payslip_id, allowance_rate_ids, overtime_rate_ids
+            )
             total_allowances += allowances
+            total_overtime += overtime
 
             emp_name = employee_lookup.get(emp_id)
             if not emp_name:
@@ -318,13 +344,16 @@ async def _run_quarterly_report_single(
             if emp_name in employee_data:
                 employee_data[emp_name]["wages"] += wages
                 employee_data[emp_name]["allowances"] += allowances
+                employee_data[emp_name]["overtime"] += overtime
+                employee_data[emp_name]["tax"] += tax_amt
                 employee_data[emp_name]["super"] += super_amt
             else:
-                employee_data[emp_name] = {"wages": wages, "allowances": allowances, "super": super_amt}
+                employee_data[emp_name] = {"wages": wages, "allowances": allowances, "overtime": overtime, "tax": tax_amt, "super": super_amt}
 
     total_wages = sum(data["wages"] for data in employee_data.values())
+    total_tax = sum(data["tax"] for data in employee_data.values())
     total_super = sum(data["super"] for data in employee_data.values())
-    total_ote = total_wages - total_allowances
+    total_ote = total_wages - total_allowances - total_overtime
 
     sorted_employees = sorted(employee_data.items(), key=lambda x: x[0])
 
@@ -334,18 +363,115 @@ async def _run_quarterly_report_single(
         "total_wages": total_wages,
         "total_allowances": total_allowances,
         "total_ote": total_ote,
+        "total_overtime": total_overtime,
+        "total_tax": total_tax,
         "total_super": total_super,
         "employees": [
             {
                 "name": name,
                 "wages": data["wages"],
                 "allowances": data["allowances"],
-                "ote": data["wages"] - data["allowances"],
+                "ote": data["wages"] - data["allowances"] - data["overtime"],
+                "overtime": data["overtime"],
+                "tax": data["tax"],
                 "super": data["super"],
             }
             for name, data in sorted_employees
         ],
     }
+
+
+def _save_quarterly_report_toml(
+    profile: str,
+    fiscal_year: str,
+    quarter: int,
+    period_start: str,
+    period_end: str,
+    employees: list[dict[str, Any]],
+    totals: dict[str, float],
+    duration_seconds: float | None = None,
+) -> str:
+    """Save quarterly wages report to a TOML file.
+
+    Args:
+        profile: Xero profile name (e.g., 'SM', 'SP')
+        fiscal_year: Fiscal year string (e.g., 'FY22')
+        quarter: Quarter number (1-4)
+        period_start: Start date (YYYY-MM-DD)
+        period_end: End date (YYYY-MM-DD)
+        employees: List of employee wage data
+        totals: Total wages, allowances, OTE, overtime, tax, super
+        duration_seconds: Time taken to generate the report
+
+    Returns:
+        Path to the saved TOML file
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    # Save to superannuation compliance folder
+    output_dir = Path.home() / "SimpleMotion" / "90-Govern" / "92-Complicance" / "XX-Superannuation"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Format duration
+    if duration_seconds:
+        duration_mins = int(duration_seconds // 60)
+        duration_secs = int(duration_seconds % 60)
+        duration_str = f"{duration_mins}:{duration_secs:02d}"
+    else:
+        duration_str = "N/A"
+
+    generated_at = datetime.now(timezone.utc)
+
+    # Build TOML content
+    fy_upper = fiscal_year.upper()
+    lines = [
+        f"# Quarterly Payroll Report: {fy_upper} Q{quarter}",
+        f"# Profile: {profile}",
+        f"# Generated: {generated_at.strftime('%d-%m-%Y @ %H:%M UTC')} over {duration_str}",
+        "",
+        "[report]",
+        f'fiscal_year = "{fy_upper}"',
+        f"quarter = {quarter}",
+        f'profile = "{profile}"',
+        f'period_start = "{period_start}"',
+        f'period_end = "{period_end}"',
+        f'generated_at = "{generated_at.isoformat()}"',
+        f'generation_duration = "{duration_str}"',
+        "",
+        "[totals]",
+        f"gross_wages = {totals['wages']:.2f}",
+        f"allowances = {totals['allowances']:.2f}",
+        f"ote = {totals['ote']:.2f}",
+        f"overtime = {totals.get('overtime', 0.0):.2f}",
+        f"tax = {totals.get('tax', 0.0):.2f}",
+        f"superannuation = {totals['super']:.2f}",
+        f"super_percentage = {totals['super_percentage']:.2f}",
+        f"employee_count = {len(employees)}",
+        "",
+    ]
+
+    # Add employee details
+    for emp in employees:
+        lines.append(f'[[employees]]')
+        lines.append(f'name = "{emp["name"]}"')
+        lines.append(f"gross_wages = {emp['wages']:.2f}")
+        lines.append(f"allowances = {emp['allowances']:.2f}")
+        lines.append(f"ote = {emp['ote']:.2f}")
+        lines.append(f"overtime = {emp.get('overtime', 0.0):.2f}")
+        lines.append(f"tax = {emp.get('tax', 0.0):.2f}")
+        lines.append(f"superannuation = {emp['super']:.2f}")
+        lines.append(f"super_percentage = {emp['super_percentage']:.2f}")
+        lines.append("")
+
+    toml_content = "\n".join(lines)
+
+    # Save to file
+    filename = f"{profile}-Payroll-{fy_upper}-Q{quarter}.toml"
+    filepath = output_dir / filename
+    filepath.write_text(toml_content)
+
+    return str(filepath)
 
 
 async def _run_quarterly_report_all_profiles(
@@ -591,6 +717,11 @@ async def handle_payroll_tool(
             }
 
         elif name == "xero_quarterly_wages_report":
+            from datetime import datetime, timezone
+            import time
+
+            report_start_time = time.time()
+
             fiscal_year = arguments["fiscal_year"]
             quarter = arguments["quarter"]
             profile_arg = arguments.get("profile", "").upper()
@@ -619,7 +750,6 @@ async def handle_payroll_tool(
                     match = re.search(r"/Date\((\d+)", payment_date)
                     if match:
                         timestamp_ms = int(match.group(1))
-                        from datetime import datetime, timezone
                         pr_date = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
                         pr_date_str = pr_date.strftime("%Y-%m-%d")
 
@@ -636,19 +766,22 @@ async def handle_payroll_tool(
                     "period_end": end_date,
                     "employee_count": 0,
                     "total_wages": 0,
-                    "total_ote": 0,
                     "total_allowances": 0,
+                    "total_ote": 0,
+                    "total_overtime": 0,
+                    "total_tax": 0,
                     "total_super": 0,
                     "super_percentage": 0,
                 }
 
             # Build lookups
             employee_lookup = await _build_employee_lookup(client)
-            allowance_rate_ids = await _build_allowance_rate_ids(client)
+            allowance_rate_ids, overtime_rate_ids = await _build_earnings_rate_categories(client)
 
-            # Aggregate wages, allowances and super by employee
+            # Aggregate wages, allowances, overtime, tax and super by employee
             employee_data: dict[str, dict[str, float]] = {}
             total_allowances = 0.0
+            total_overtime = 0.0
 
             for pr in filtered_payruns:
                 # Fetch full payrun details to get payslips
@@ -657,11 +790,15 @@ async def handle_payroll_tool(
                     emp_id = payslip.get("EmployeeID", "")
                     payslip_id = payslip.get("PayslipID", "")
                     wages = float(payslip.get("Wages", 0) or 0)
+                    tax_amt = float(payslip.get("Tax", 0) or 0)
                     super_amt = float(payslip.get("Super", 0) or 0)
 
-                    # Get allowances from detailed payslip
-                    allowances = await _get_payslip_allowances(client, payslip_id, allowance_rate_ids)
+                    # Get allowances and overtime from detailed payslip
+                    allowances, overtime = await _get_payslip_earnings_breakdown(
+                        client, payslip_id, allowance_rate_ids, overtime_rate_ids
+                    )
                     total_allowances += allowances
+                    total_overtime += overtime
 
                     # Get employee name from lookup or payslip
                     emp_name = employee_lookup.get(emp_id)
@@ -673,16 +810,19 @@ async def handle_payroll_tool(
                     if emp_name in employee_data:
                         employee_data[emp_name]["wages"] += wages
                         employee_data[emp_name]["allowances"] += allowances
+                        employee_data[emp_name]["overtime"] += overtime
+                        employee_data[emp_name]["tax"] += tax_amt
                         employee_data[emp_name]["super"] += super_amt
                     else:
-                        employee_data[emp_name] = {"wages": wages, "allowances": allowances, "super": super_amt}
+                        employee_data[emp_name] = {"wages": wages, "allowances": allowances, "overtime": overtime, "tax": tax_amt, "super": super_amt}
 
             # Calculate totals
             total_wages = sum(data["wages"] for data in employee_data.values())
+            total_tax = sum(data["tax"] for data in employee_data.values())
             total_super = sum(data["super"] for data in employee_data.values())
-            total_ote = total_wages - total_allowances  # OTE = wages minus allowances
+            total_ote = total_wages - total_allowances - total_overtime  # OTE = wages minus allowances and overtime
 
-            # Super percentage based on OTE (excluding allowances)
+            # Super percentage based on OTE (excluding allowances and overtime)
             super_percentage = (total_super / total_ote * 100) if total_ote > 0 else 0
 
             # Sort by name
@@ -702,21 +842,73 @@ async def handle_payroll_tool(
                 "",
                 f"**Period:** {start_date_fmt} to {end_date_fmt}",
                 "",
-                "| Employee | Gross Wages | Allowances | OTE | Super | Super % |",
-                "|:---------|------------:|-----------:|----:|------:|--------:|",
+                "| Employee | Gross Wages | Allowances | Ordinary Time | Over Time | Taxes | Super | Super % |",
+                "|:---------|------------:|-----------:|--------------:|----------:|------:|------:|--------:|",
             ]
 
             for emp_name, data in sorted_employees:
                 emp_wages = data["wages"]
                 emp_allowances = data["allowances"]
-                emp_ote = emp_wages - emp_allowances
+                emp_overtime = data["overtime"]
+                emp_ote = emp_wages - emp_allowances - emp_overtime
+                emp_tax = data["tax"]
                 emp_super = data["super"]
                 emp_super_pct = (emp_super / emp_ote * 100) if emp_ote > 0 else 0
-                lines.append(f"| {emp_name} | ${emp_wages:,.2f} | ${emp_allowances:,.2f} | ${emp_ote:,.2f} | ${emp_super:,.2f} | {emp_super_pct:.2f}% |")
+                lines.append(f"| {emp_name} | ${emp_wages:,.2f} | ${emp_allowances:,.2f} | ${emp_ote:,.2f} | ${emp_overtime:,.2f} | ${emp_tax:,.2f} | ${emp_super:,.2f} | {emp_super_pct:.2f}% |")
 
-            lines.append(f"| **Total** | **${total_wages:,.2f}** | **${total_allowances:,.2f}** | **${total_ote:,.2f}** | **${total_super:,.2f}** | **{super_percentage:.2f}%** |")
+            lines.append(f"| **Total** | **${total_wages:,.2f}** | **${total_allowances:,.2f}** | **${total_ote:,.2f}** | **${total_overtime:,.2f}** | **${total_tax:,.2f}** | **${total_super:,.2f}** | **{super_percentage:.2f}%** |")
             lines.append("")
-            lines.append("*Super % calculated on OTE (excluding allowances)*")
+            lines.append("*Super % calculated on Ordinary Time (excluding allowances and over time)*")
+
+            # Build employees list for TOML
+            employees_list = [
+                {
+                    "name": name,
+                    "wages": data["wages"],
+                    "allowances": data["allowances"],
+                    "ote": data["wages"] - data["allowances"] - data["overtime"],
+                    "overtime": data["overtime"],
+                    "tax": data["tax"],
+                    "super": data["super"],
+                    "super_percentage": (data["super"] / (data["wages"] - data["allowances"] - data["overtime"]) * 100) if (data["wages"] - data["allowances"] - data["overtime"]) > 0 else 0,
+                }
+                for name, data in sorted_employees
+            ]
+
+            # Calculate duration
+            report_end_time = time.time()
+            duration_seconds = report_end_time - report_start_time
+            duration_mins = int(duration_seconds // 60)
+            duration_secs = int(duration_seconds % 60)
+            generated_at = datetime.now(timezone.utc)
+            generated_str = generated_at.strftime("%d-%m-%Y @ %H:%M UTC")
+            duration_str = f"{duration_mins}:{duration_secs:02d}"
+
+            # Save to TOML
+            profile = profile_arg if profile_arg else client.oauth.profile
+            filepath = _save_quarterly_report_toml(
+                profile=profile,
+                fiscal_year=fiscal_year,
+                quarter=quarter,
+                period_start=start_date,
+                period_end=end_date,
+                employees=employees_list,
+                totals={
+                    "wages": total_wages,
+                    "allowances": total_allowances,
+                    "ote": total_ote,
+                    "overtime": total_overtime,
+                    "tax": total_tax,
+                    "super": total_super,
+                    "super_percentage": super_percentage,
+                },
+                duration_seconds=duration_seconds,
+            )
+
+            # Add metadata to report
+            lines.append("")
+            lines.append(f"*Report generated on {generated_str} over {duration_str}*")
+            lines.insert(3, f"**Saved to:** `{filepath}`")
 
             report = "\n".join(lines)
 
@@ -726,23 +918,16 @@ async def handle_payroll_tool(
                 "quarter": quarter,
                 "period_start": start_date,
                 "period_end": end_date,
+                "file_path": filepath,
                 "employee_count": len(sorted_employees),
                 "total_wages": total_wages,
                 "total_allowances": total_allowances,
                 "total_ote": total_ote,
+                "total_overtime": total_overtime,
+                "total_tax": total_tax,
                 "total_super": total_super,
                 "super_percentage": super_percentage,
-                "employees": [
-                    {
-                        "name": name,
-                        "wages": data["wages"],
-                        "allowances": data["allowances"],
-                        "ote": data["wages"] - data["allowances"],
-                        "super": data["super"],
-                        "super_percentage": (data["super"] / (data["wages"] - data["allowances"]) * 100) if (data["wages"] - data["allowances"]) > 0 else 0,
-                    }
-                    for name, data in sorted_employees
-                ],
+                "employees": employees_list,
             }
 
     except Exception as e:
