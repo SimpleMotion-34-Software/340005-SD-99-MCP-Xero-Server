@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.8] - 2026-01-27
+
+### Added
+- Xero Payroll AU API support with new tools:
+  - `xero_list_payruns` - List pay runs with status filtering
+  - `xero_get_payrun` - Get pay run details with payslips
+  - `xero_list_payroll_employees` - List payroll employees
+  - `xero_quarterly_wages_report` - Generate quarterly wages report with gross wages, superannuation, and super percentage
+- Quarterly report filters by payment date (for BAS/cash basis reporting)
+- Rate limiting improvements: 1.2s minimum interval between requests to avoid bursts
+
+### Changed
+- Simplified OAuth to client credentials only (Custom Connection apps)
+- Reduced rate limit threshold from 60 to 50 requests per minute (more conservative)
+
 ## [0.0.1.6] - 2026-01-25
 
 ### Added
