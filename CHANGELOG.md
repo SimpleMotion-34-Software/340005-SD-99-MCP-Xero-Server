@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.12] - 2026-01-27
+
+### Changed
+- SP profile keychain suffix changed from empty to `-sp`
+- Credentials now use `xero-client-id-sp` and `xero-client-secret-sp`
+- Token storage changed from `tokens.enc` to `tokens-sp.enc`
+
 ## [0.0.1.10] - 2026-01-27
 
 ### Added
