@@ -11,6 +11,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent
 
 from .auth import XeroOAuth
+from .auth.oauth import CREDENTIAL_PROFILES, get_active_profile
 from .tools import (
     ALL_TOOLS,
     handle_auth_tool,
@@ -36,11 +37,55 @@ class XeroMCPServer:
     def __init__(self):
         """Initialize the Xero MCP server."""
         self.server = Server("xero-mcp")
-        self.oauth = XeroOAuth()
-        self.client = XeroClient(self.oauth)
+
+        # Multi-profile support: maintain OAuth/Client instances per profile
+        self._oauth_instances: dict[str, XeroOAuth] = {}
+        self._client_instances: dict[str, XeroClient] = {}
 
         # Register handlers
         self._register_handlers()
+
+    def get_oauth(self, profile: str | None = None) -> XeroOAuth:
+        """Get OAuth instance for a profile, creating if needed.
+
+        Args:
+            profile: Profile name (e.g., 'SP', 'SM'). Defaults to active profile.
+
+        Returns:
+            XeroOAuth instance for the profile
+        """
+        profile = (profile or get_active_profile()).upper()
+        if profile not in self._oauth_instances:
+            self._oauth_instances[profile] = XeroOAuth(profile=profile)
+        return self._oauth_instances[profile]
+
+    def get_client(self, profile: str | None = None) -> XeroClient:
+        """Get Xero client for a profile, creating if needed.
+
+        Args:
+            profile: Profile name (e.g., 'SP', 'SM'). Defaults to active profile.
+
+        Returns:
+            XeroClient instance for the profile
+        """
+        profile = (profile or get_active_profile()).upper()
+        if profile not in self._client_instances:
+            oauth = self.get_oauth(profile)
+            self._client_instances[profile] = XeroClient(oauth)
+        return self._client_instances[profile]
+
+    def get_all_clients(self) -> dict[str, XeroClient]:
+        """Get clients for all configured profiles.
+
+        Returns:
+            Dictionary mapping profile name to XeroClient
+        """
+        clients = {}
+        for profile in CREDENTIAL_PROFILES:
+            oauth = self.get_oauth(profile)
+            if oauth.is_configured:
+                clients[profile] = self.get_client(profile)
+        return clients
 
     def _register_handlers(self) -> None:
         """Register MCP server handlers."""
@@ -73,35 +118,43 @@ class XeroMCPServer:
         Returns:
             Tool result
         """
+        # Get profile from arguments (optional, defaults to active profile)
+        profile = arguments.get("profile")
+
         # Authentication tools
         if name.startswith("xero_auth") or name in ("xero_connect", "xero_disconnect",
                                                      "xero_list_tenants", "xero_set_tenant",
-                                                     "xero_list_profiles", "xero_set_profile"):
-            return await handle_auth_tool(name, arguments, self.oauth)
+                                                     "xero_list_profiles", "xero_set_profile",
+                                                     "xero_connect_all"):
+            return await handle_auth_tool(name, arguments, self.get_oauth(profile), self)
+
+        # Get client for the specified profile
+        oauth = self.get_oauth(profile)
+        client = self.get_client(profile)
 
         # Check authentication for other tools
-        tokens = await self.oauth.get_valid_tokens()
+        tokens = await oauth.get_valid_tokens()
         if not tokens:
             return {
-                "error": "Not authenticated with Xero",
+                "error": f"Not authenticated with Xero (profile: {profile or get_active_profile()})",
                 "message": "Use xero_connect to connect to Xero first",
             }
 
         # Contact tools
         if name.startswith("xero_") and "contact" in name:
-            return await handle_contact_tool(name, arguments, self.client)
+            return await handle_contact_tool(name, arguments, client)
 
         # Quote tools
         if name.startswith("xero_") and "quote" in name:
-            return await handle_quote_tool(name, arguments, self.client)
+            return await handle_quote_tool(name, arguments, client)
 
         # Invoice tools
         if name.startswith("xero_") and "invoice" in name:
-            return await handle_invoice_tool(name, arguments, self.client)
+            return await handle_invoice_tool(name, arguments, client)
 
         # Payroll tools
         if name.startswith("xero_") and ("payroll" in name or "payrun" in name or "wages" in name):
-            return await handle_payroll_tool(name, arguments, self.client)
+            return await handle_payroll_tool(name, arguments, client, self)
 
         return {"error": f"Unknown tool: {name}"}
 

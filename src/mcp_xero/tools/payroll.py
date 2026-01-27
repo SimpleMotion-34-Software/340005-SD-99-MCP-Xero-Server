@@ -1,10 +1,13 @@
 """Payroll tools for Xero MCP server."""
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from mcp.types import Tool
 
 from ..xero import XeroClient
+
+if TYPE_CHECKING:
+    from ..server import XeroMCPServer
 
 PAYROLL_TOOLS = [
     Tool(
@@ -24,6 +27,10 @@ PAYROLL_TOOLS = [
                     "default": 1,
                     "minimum": 1,
                 },
+                "profile": {
+                    "type": "string",
+                    "description": "Xero profile to use (e.g., 'SP', 'SM'). Defaults to active profile.",
+                },
             },
             "required": [],
         },
@@ -37,6 +44,10 @@ PAYROLL_TOOLS = [
                 "payrun_id": {
                     "type": "string",
                     "description": "The Xero pay run ID (UUID format)",
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Xero profile to use (e.g., 'SP', 'SM'). Defaults to active profile.",
                 },
             },
             "required": ["payrun_id"],
@@ -59,13 +70,17 @@ PAYROLL_TOOLS = [
                     "default": 1,
                     "minimum": 1,
                 },
+                "profile": {
+                    "type": "string",
+                    "description": "Xero profile to use (e.g., 'SP', 'SM'). Defaults to active profile.",
+                },
             },
             "required": [],
         },
     ),
     Tool(
         name="xero_quarterly_wages_report",
-        description="Generate a quarterly wages report for Australian financial year quarters. Returns a markdown table with gross wages, allowances, OTE (Ordinary Time Earnings), superannuation, and super percentage. Super % is calculated on OTE (excluding per diem allowances). Pay runs are filtered by payment date.",
+        description="Generate a quarterly wages report for Australian financial year quarters. Returns a markdown table with gross wages, allowances, OTE (Ordinary Time Earnings), superannuation, and super percentage. Super % is calculated on OTE (excluding per diem allowances). Pay runs are filtered by payment date. Can run across all connected profiles.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -78,6 +93,10 @@ PAYROLL_TOOLS = [
                     "description": "Quarter number (1-4). Q1=Jul-Sep, Q2=Oct-Dec, Q3=Jan-Mar, Q4=Apr-Jun",
                     "minimum": 1,
                     "maximum": 4,
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Xero profile to use (e.g., 'SP', 'SM'). Defaults to active profile. Use 'ALL' to run across all connected profiles.",
                 },
             },
             "required": ["fiscal_year", "quarter"],
@@ -222,13 +241,271 @@ async def _get_payslip_allowances(client: XeroClient, payslip_id: str, allowance
     return total_allowances
 
 
-async def handle_payroll_tool(name: str, arguments: dict[str, Any], client: XeroClient) -> dict[str, Any]:
+async def _run_quarterly_report_single(
+    client: XeroClient,
+    profile: str,
+    fiscal_year: str,
+    quarter: int,
+) -> dict[str, Any]:
+    """Run quarterly wages report for a single profile.
+
+    Args:
+        client: Xero API client
+        profile: Profile name
+        fiscal_year: Fiscal year (e.g., "FY25")
+        quarter: Quarter number (1-4)
+
+    Returns:
+        Report data for this profile
+    """
+    import re
+    from datetime import datetime, timezone
+
+    start_date, end_date = _get_quarter_dates(fiscal_year, quarter)
+
+    # Fetch all POSTED pay runs
+    all_payruns = await _fetch_all_payruns(client, status="POSTED")
+
+    # Filter pay runs within the date range based on PaymentDate
+    filtered_payruns = []
+    for pr in all_payruns:
+        payment_date = pr.get("PaymentDate", "")
+        if payment_date:
+            match = re.search(r"/Date\((\d+)", payment_date)
+            if match:
+                timestamp_ms = int(match.group(1))
+                pr_date = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+                pr_date_str = pr_date.strftime("%Y-%m-%d")
+                if start_date <= pr_date_str <= end_date:
+                    filtered_payruns.append(pr)
+
+    if not filtered_payruns:
+        return {
+            "profile": profile,
+            "employee_count": 0,
+            "total_wages": 0,
+            "total_allowances": 0,
+            "total_ote": 0,
+            "total_super": 0,
+            "employees": [],
+        }
+
+    # Build lookups
+    employee_lookup = await _build_employee_lookup(client)
+    allowance_rate_ids = await _build_allowance_rate_ids(client)
+
+    # Aggregate wages, allowances and super by employee
+    employee_data: dict[str, dict[str, float]] = {}
+    total_allowances = 0.0
+
+    for pr in filtered_payruns:
+        full_payrun = await client.get_payrun(pr["PayRunID"])
+        for payslip in full_payrun.get("Payslips", []):
+            emp_id = payslip.get("EmployeeID", "")
+            payslip_id = payslip.get("PayslipID", "")
+            wages = float(payslip.get("Wages", 0) or 0)
+            super_amt = float(payslip.get("Super", 0) or 0)
+
+            allowances = await _get_payslip_allowances(client, payslip_id, allowance_rate_ids)
+            total_allowances += allowances
+
+            emp_name = employee_lookup.get(emp_id)
+            if not emp_name:
+                first_name = payslip.get("FirstName", "")
+                last_name = payslip.get("LastName", "")
+                emp_name = f"{first_name} {last_name}".strip() or emp_id
+
+            if emp_name in employee_data:
+                employee_data[emp_name]["wages"] += wages
+                employee_data[emp_name]["allowances"] += allowances
+                employee_data[emp_name]["super"] += super_amt
+            else:
+                employee_data[emp_name] = {"wages": wages, "allowances": allowances, "super": super_amt}
+
+    total_wages = sum(data["wages"] for data in employee_data.values())
+    total_super = sum(data["super"] for data in employee_data.values())
+    total_ote = total_wages - total_allowances
+
+    sorted_employees = sorted(employee_data.items(), key=lambda x: x[0])
+
+    return {
+        "profile": profile,
+        "employee_count": len(sorted_employees),
+        "total_wages": total_wages,
+        "total_allowances": total_allowances,
+        "total_ote": total_ote,
+        "total_super": total_super,
+        "employees": [
+            {
+                "name": name,
+                "wages": data["wages"],
+                "allowances": data["allowances"],
+                "ote": data["wages"] - data["allowances"],
+                "super": data["super"],
+            }
+            for name, data in sorted_employees
+        ],
+    }
+
+
+async def _run_quarterly_report_all_profiles(
+    server: "XeroMCPServer",
+    fiscal_year: str,
+    quarter: int,
+) -> dict[str, Any]:
+    """Run quarterly wages report across all connected profiles.
+
+    Args:
+        server: Server instance with access to all profiles
+        fiscal_year: Fiscal year (e.g., "FY25")
+        quarter: Quarter number (1-4)
+
+    Returns:
+        Combined report data from all profiles
+    """
+    from ..auth.oauth import CREDENTIAL_PROFILES
+
+    start_date, end_date = _get_quarter_dates(fiscal_year, quarter)
+
+    # Format dates as DD-MM-YYYY
+    def format_date(date_str: str) -> str:
+        parts = date_str.split("-")
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+
+    start_date_fmt = format_date(start_date)
+    end_date_fmt = format_date(end_date)
+
+    profile_results = {}
+    all_employees: dict[str, dict[str, float]] = {}
+    grand_totals = {
+        "wages": 0.0,
+        "allowances": 0.0,
+        "ote": 0.0,
+        "super": 0.0,
+    }
+
+    # Run report for each connected profile
+    for profile in CREDENTIAL_PROFILES:
+        oauth = server.get_oauth(profile)
+        tokens = await oauth.get_valid_tokens()
+        if not tokens:
+            profile_results[profile] = {"connected": False, "error": "Not authenticated"}
+            continue
+
+        client = server.get_client(profile)
+        try:
+            result = await _run_quarterly_report_single(client, profile, fiscal_year, quarter)
+            profile_results[profile] = result
+
+            # Aggregate into combined totals
+            grand_totals["wages"] += result["total_wages"]
+            grand_totals["allowances"] += result["total_allowances"]
+            grand_totals["ote"] += result["total_ote"]
+            grand_totals["super"] += result["total_super"]
+
+            # Combine employees (prefix with profile for uniqueness)
+            for emp in result["employees"]:
+                key = f"{emp['name']} ({profile})"
+                all_employees[key] = {
+                    "wages": emp["wages"],
+                    "allowances": emp["allowances"],
+                    "ote": emp["ote"],
+                    "super": emp["super"],
+                    "profile": profile,
+                }
+        except Exception as e:
+            profile_results[profile] = {"connected": True, "error": str(e)}
+
+    # Calculate combined super percentage
+    super_percentage = (grand_totals["super"] / grand_totals["ote"] * 100) if grand_totals["ote"] > 0 else 0
+
+    # Build combined markdown report
+    lines = [
+        f"## Quarterly Wages Report: {fiscal_year}-Q{quarter} (All Profiles)",
+        "",
+        f"**Period:** {start_date_fmt} to {end_date_fmt}",
+        "",
+    ]
+
+    # Add section for each profile
+    for profile, result in profile_results.items():
+        if "error" in result:
+            lines.append(f"### {profile}: {result.get('error')}")
+            lines.append("")
+            continue
+
+        if result["employee_count"] == 0:
+            lines.append(f"### {profile}: No pay runs found")
+            lines.append("")
+            continue
+
+        prof_super_pct = (result["total_super"] / result["total_ote"] * 100) if result["total_ote"] > 0 else 0
+
+        lines.append(f"### {profile}")
+        lines.append("")
+        lines.append("| Employee | Gross Wages | Allowances | OTE | Super | Super % |")
+        lines.append("|:---------|------------:|-----------:|----:|------:|--------:|")
+
+        for emp in result["employees"]:
+            emp_ote = emp["ote"]
+            emp_super_pct = (emp["super"] / emp_ote * 100) if emp_ote > 0 else 0
+            lines.append(
+                f"| {emp['name']} | ${emp['wages']:,.2f} | ${emp['allowances']:,.2f} | "
+                f"${emp_ote:,.2f} | ${emp['super']:,.2f} | {emp_super_pct:.2f}% |"
+            )
+
+        lines.append(
+            f"| **Subtotal** | **${result['total_wages']:,.2f}** | **${result['total_allowances']:,.2f}** | "
+            f"**${result['total_ote']:,.2f}** | **${result['total_super']:,.2f}** | **{prof_super_pct:.2f}%** |"
+        )
+        lines.append("")
+
+    # Grand total section
+    if grand_totals["wages"] > 0:
+        lines.append("### Combined Total")
+        lines.append("")
+        lines.append("| | Gross Wages | Allowances | OTE | Super | Super % |")
+        lines.append("|:---------|------------:|-----------:|----:|------:|--------:|")
+        lines.append(
+            f"| **Grand Total** | **${grand_totals['wages']:,.2f}** | **${grand_totals['allowances']:,.2f}** | "
+            f"**${grand_totals['ote']:,.2f}** | **${grand_totals['super']:,.2f}** | **{super_percentage:.2f}%** |"
+        )
+        lines.append("")
+
+    lines.append("*Super % calculated on OTE (excluding allowances)*")
+
+    report = "\n".join(lines)
+
+    return {
+        "report": report,
+        "fiscal_year": fiscal_year,
+        "quarter": quarter,
+        "period_start": start_date,
+        "period_end": end_date,
+        "profiles": profile_results,
+        "grand_totals": {
+            "total_wages": grand_totals["wages"],
+            "total_allowances": grand_totals["allowances"],
+            "total_ote": grand_totals["ote"],
+            "total_super": grand_totals["super"],
+            "super_percentage": super_percentage,
+        },
+    }
+
+
+async def handle_payroll_tool(
+    name: str,
+    arguments: dict[str, Any],
+    client: XeroClient,
+    server: "XeroMCPServer | None" = None,
+) -> dict[str, Any]:
     """Handle payroll tool calls.
 
     Args:
         name: Tool name
         arguments: Tool arguments
-        client: Xero API client
+        client: Xero API client for the current/specified profile
+        server: Server instance for multi-profile operations
 
     Returns:
         Tool result
@@ -316,6 +593,13 @@ async def handle_payroll_tool(name: str, arguments: dict[str, Any], client: Xero
         elif name == "xero_quarterly_wages_report":
             fiscal_year = arguments["fiscal_year"]
             quarter = arguments["quarter"]
+            profile_arg = arguments.get("profile", "").upper()
+
+            # Check if running across all profiles
+            if profile_arg == "ALL" and server:
+                return await _run_quarterly_report_all_profiles(
+                    server, fiscal_year, quarter
+                )
 
             # Calculate date range for the quarter
             start_date, end_date = _get_quarter_dates(fiscal_year, quarter)
