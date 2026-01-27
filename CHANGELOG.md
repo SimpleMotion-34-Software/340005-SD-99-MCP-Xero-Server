@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.16] - 2026-01-27
+
+### Added
+- Overtime tracking in quarterly wages report (separate from OTE)
+- Tax (PAYG withholding) amounts in quarterly wages report
+- TOML export: quarterly reports saved to `90-Govern/92-Compliance/XX-Superannuation/`
+- Report generation timestamp and duration tracking
+
+### Changed
+- OTE calculation now excludes both allowances AND overtime
+- Report table includes new columns: Ordinary Time, Over Time, Taxes
+- Super percentage calculated on true Ordinary Time (wages minus allowances and overtime)
+
 ## [0.0.1.14] - 2026-01-27
 
 ### Added
