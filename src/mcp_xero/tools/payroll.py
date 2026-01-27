@@ -65,7 +65,7 @@ PAYROLL_TOOLS = [
     ),
     Tool(
         name="xero_quarterly_wages_report",
-        description="Generate a quarterly wages report for Australian financial year quarters. Returns a markdown table with employee names, gross wages, superannuation, and super percentage for the specified quarter. Pay runs are filtered by payment date.",
+        description="Generate a quarterly wages report for Australian financial year quarters. Returns a markdown table with gross wages, allowances, OTE (Ordinary Time Earnings), superannuation, and super percentage. Super % is calculated on OTE (excluding per diem allowances). Pay runs are filtered by payment date.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -171,6 +171,55 @@ async def _build_employee_lookup(client: XeroClient) -> dict[str, str]:
         page += 1
 
     return lookup
+
+
+async def _build_allowance_rate_ids(client: XeroClient) -> set[str]:
+    """Build a set of earnings rate IDs that are allowances (not OTE).
+
+    Args:
+        client: Xero API client
+
+    Returns:
+        Set of EarningsRateID values for allowances/per diems
+    """
+    response = await client._payroll_request("GET", "PayItems")
+    earnings_rates = response.get("PayItems", {}).get("EarningsRates", [])
+
+    allowance_ids = set()
+    for er in earnings_rates:
+        name = er.get("Name", "").lower()
+        earnings_type = er.get("EarningsType", "")
+        # Identify allowances and per diems (not subject to super)
+        if earnings_type == "ALLOWANCE" or "per diem" in name or "allowance" in name:
+            allowance_ids.add(er.get("EarningsRateID", ""))
+
+    return allowance_ids
+
+
+async def _get_payslip_allowances(client: XeroClient, payslip_id: str, allowance_rate_ids: set[str]) -> float:
+    """Get total allowances from a detailed payslip.
+
+    Args:
+        client: Xero API client
+        payslip_id: Payslip ID to fetch
+        allowance_rate_ids: Set of earnings rate IDs that are allowances
+
+    Returns:
+        Total allowance amount for the payslip
+    """
+    response = await client._payroll_request("GET", f"Payslip/{payslip_id}")
+    payslip = response.get("Payslip", {})
+
+    total_allowances = 0.0
+    for el in payslip.get("EarningsLines", []):
+        if el.get("EarningsRateID", "") in allowance_rate_ids:
+            units = float(el.get("NumberOfUnits", 0) or 0)
+            rate = float(el.get("RatePerUnit", 0) or 0)
+            fixed = float(el.get("FixedAmount", 0) or 0)
+            amount = fixed if fixed else (units * rate)
+            total_allowances += amount
+
+    return total_allowances
 
 
 async def handle_payroll_tool(name: str, arguments: dict[str, Any], client: XeroClient) -> dict[str, Any]:
@@ -303,28 +352,32 @@ async def handle_payroll_tool(name: str, arguments: dict[str, Any], client: Xero
                     "period_end": end_date,
                     "employee_count": 0,
                     "total_wages": 0,
+                    "total_ote": 0,
+                    "total_allowances": 0,
                     "total_super": 0,
                     "super_percentage": 0,
                 }
 
-            # Calculate totals from pay run summaries (more efficient than fetching all payslips)
-            total_wages = sum(float(pr.get("Wages", 0) or 0) for pr in filtered_payruns)
-            total_super = sum(float(pr.get("Super", 0) or 0) for pr in filtered_payruns)
-            super_percentage = (total_super / total_wages * 100) if total_wages > 0 else 0
-
-            # Build employee name lookup
+            # Build lookups
             employee_lookup = await _build_employee_lookup(client)
+            allowance_rate_ids = await _build_allowance_rate_ids(client)
 
-            # Aggregate wages and super by employee
+            # Aggregate wages, allowances and super by employee
             employee_data: dict[str, dict[str, float]] = {}
+            total_allowances = 0.0
 
             for pr in filtered_payruns:
                 # Fetch full payrun details to get payslips
                 full_payrun = await client.get_payrun(pr["PayRunID"])
                 for payslip in full_payrun.get("Payslips", []):
                     emp_id = payslip.get("EmployeeID", "")
+                    payslip_id = payslip.get("PayslipID", "")
                     wages = float(payslip.get("Wages", 0) or 0)
                     super_amt = float(payslip.get("Super", 0) or 0)
+
+                    # Get allowances from detailed payslip
+                    allowances = await _get_payslip_allowances(client, payslip_id, allowance_rate_ids)
+                    total_allowances += allowances
 
                     # Get employee name from lookup or payslip
                     emp_name = employee_lookup.get(emp_id)
@@ -335,30 +388,51 @@ async def handle_payroll_tool(name: str, arguments: dict[str, Any], client: Xero
 
                     if emp_name in employee_data:
                         employee_data[emp_name]["wages"] += wages
+                        employee_data[emp_name]["allowances"] += allowances
                         employee_data[emp_name]["super"] += super_amt
                     else:
-                        employee_data[emp_name] = {"wages": wages, "super": super_amt}
+                        employee_data[emp_name] = {"wages": wages, "allowances": allowances, "super": super_amt}
+
+            # Calculate totals
+            total_wages = sum(data["wages"] for data in employee_data.values())
+            total_super = sum(data["super"] for data in employee_data.values())
+            total_ote = total_wages - total_allowances  # OTE = wages minus allowances
+
+            # Super percentage based on OTE (excluding allowances)
+            super_percentage = (total_super / total_ote * 100) if total_ote > 0 else 0
 
             # Sort by name
             sorted_employees = sorted(employee_data.items(), key=lambda x: x[0])
 
-            # Build markdown table
+            # Format dates as DD-MM-YYYY
+            def format_date(date_str: str) -> str:
+                parts = date_str.split("-")
+                return f"{parts[2]}-{parts[1]}-{parts[0]}"
+
+            start_date_fmt = format_date(start_date)
+            end_date_fmt = format_date(end_date)
+
+            # Build markdown table with right-aligned numbers
             lines = [
                 f"## Quarterly Wages Report: {fiscal_year}-Q{quarter}",
                 "",
-                f"**Period:** {start_date} to {end_date}",
+                f"**Period:** {start_date_fmt} to {end_date_fmt}",
                 "",
-                "| Employee | Gross Wages | Super | Super % |",
-                "|----------|-------------|-------|---------|",
+                "| Employee | Gross Wages | Allowances | OTE | Super | Super % |",
+                "|:---------|------------:|-----------:|----:|------:|--------:|",
             ]
 
             for emp_name, data in sorted_employees:
                 emp_wages = data["wages"]
+                emp_allowances = data["allowances"]
+                emp_ote = emp_wages - emp_allowances
                 emp_super = data["super"]
-                emp_super_pct = (emp_super / emp_wages * 100) if emp_wages > 0 else 0
-                lines.append(f"| {emp_name} | ${emp_wages:,.2f} | ${emp_super:,.2f} | {emp_super_pct:.2f}% |")
+                emp_super_pct = (emp_super / emp_ote * 100) if emp_ote > 0 else 0
+                lines.append(f"| {emp_name} | ${emp_wages:,.2f} | ${emp_allowances:,.2f} | ${emp_ote:,.2f} | ${emp_super:,.2f} | {emp_super_pct:.2f}% |")
 
-            lines.append(f"| **Total** | **${total_wages:,.2f}** | **${total_super:,.2f}** | **{super_percentage:.2f}%** |")
+            lines.append(f"| **Total** | **${total_wages:,.2f}** | **${total_allowances:,.2f}** | **${total_ote:,.2f}** | **${total_super:,.2f}** | **{super_percentage:.2f}%** |")
+            lines.append("")
+            lines.append("*Super % calculated on OTE (excluding allowances)*")
 
             report = "\n".join(lines)
 
@@ -370,14 +444,18 @@ async def handle_payroll_tool(name: str, arguments: dict[str, Any], client: Xero
                 "period_end": end_date,
                 "employee_count": len(sorted_employees),
                 "total_wages": total_wages,
+                "total_allowances": total_allowances,
+                "total_ote": total_ote,
                 "total_super": total_super,
                 "super_percentage": super_percentage,
                 "employees": [
                     {
                         "name": name,
                         "wages": data["wages"],
+                        "allowances": data["allowances"],
+                        "ote": data["wages"] - data["allowances"],
                         "super": data["super"],
-                        "super_percentage": (data["super"] / data["wages"] * 100) if data["wages"] > 0 else 0,
+                        "super_percentage": (data["super"] / (data["wages"] - data["allowances"]) * 100) if (data["wages"] - data["allowances"]) > 0 else 0,
                     }
                     for name, data in sorted_employees
                 ],
