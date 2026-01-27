@@ -11,12 +11,14 @@ from ..auth import XeroOAuth
 
 logger = logging.getLogger(__name__)
 
-# Xero API base URL
+# Xero API base URLs
 XERO_API_BASE = "https://api.xero.com/api.xro/2.0"
+XERO_PAYROLL_AU_BASE = "https://api.xero.com/payroll.xro/1.0"
 
 # Rate limit configuration
-RATE_LIMIT_REQUESTS = 60  # per minute
+RATE_LIMIT_REQUESTS = 50  # per minute (conservative, Xero allows 60)
 RATE_LIMIT_WINDOW = 60  # seconds
+MIN_REQUEST_INTERVAL = 1.2  # minimum seconds between requests to avoid bursts
 
 
 class XeroAPIError(Exception):
@@ -77,6 +79,15 @@ class XeroClient:
     async def _check_rate_limit(self) -> None:
         """Check and enforce rate limiting."""
         now = datetime.now().timestamp()
+
+        # Enforce minimum interval between requests to avoid bursts
+        if self._request_times:
+            last_request = self._request_times[-1]
+            time_since_last = now - last_request
+            if time_since_last < MIN_REQUEST_INTERVAL:
+                wait_time = MIN_REQUEST_INTERVAL - time_since_last
+                await asyncio.sleep(wait_time)
+                now = datetime.now().timestamp()
 
         # Remove old requests outside the window
         self._request_times = [t for t in self._request_times if now - t < RATE_LIMIT_WINDOW]
@@ -704,3 +715,131 @@ class XeroClient:
         await self.update_quote(quote_id, status="INVOICED")
 
         return invoice
+
+    # ==================== Payroll AU ====================
+
+    async def _payroll_request(
+        self,
+        method: str,
+        endpoint: str,
+        data: dict | None = None,
+        params: dict | None = None,
+    ) -> dict[str, Any]:
+        """Make authenticated request to Xero Payroll AU API.
+
+        Args:
+            method: HTTP method
+            endpoint: API endpoint (without base URL)
+            data: Request body data
+            params: Query parameters
+
+        Returns:
+            Response data
+
+        Raises:
+            XeroAPIError: If request fails
+        """
+        tokens = await self.oauth.get_valid_tokens()
+        if not tokens:
+            raise XeroAPIError("Not authenticated with Xero", status_code=401)
+
+        await self._check_rate_limit()
+
+        url = f"{XERO_PAYROLL_AU_BASE}/{endpoint}"
+        headers = {
+            "Authorization": f"Bearer {tokens.access_token}",
+            "xero-tenant-id": tokens.tenant_id or "",
+            "Accept": "application/json",
+        }
+
+        if data:
+            headers["Content-Type"] = "application/json"
+
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(3):  # Retry up to 3 times
+                async with session.request(
+                    method,
+                    url,
+                    json=data,
+                    params=params,
+                    headers=headers,
+                ) as response:
+                    # Handle rate limiting
+                    if response.status == 429:
+                        retry_after = int(response.headers.get("Retry-After", 60))
+                        logger.warning(f"Rate limited, retrying after {retry_after}s")
+                        await asyncio.sleep(retry_after)
+                        continue
+
+                    # Handle other errors
+                    if response.status >= 400:
+                        error_text = await response.text()
+                        user_message = self._parse_error_message(error_text)
+                        raise XeroAPIError(
+                            user_message,
+                            status_code=response.status,
+                            details=error_text,
+                        )
+
+                    return await response.json()
+
+            raise XeroAPIError("Max retries exceeded", status_code=429)
+
+    async def list_payruns(
+        self,
+        status: str | None = None,
+        page: int = 1,
+    ) -> list[dict[str, Any]]:
+        """List pay runs from Xero Payroll AU.
+
+        Args:
+            status: Filter by status (DRAFT, POSTED)
+            page: Page number (100 results per page)
+
+        Returns:
+            List of pay runs
+        """
+        params: dict[str, Any] = {"page": page}
+
+        if status:
+            params["where"] = f'PayRunStatus=="{status}"'
+
+        response = await self._payroll_request("GET", "PayRuns", params=params)
+        return response.get("PayRuns", [])
+
+    async def get_payrun(self, payrun_id: str) -> dict[str, Any]:
+        """Get pay run by ID with full details including payslips.
+
+        Args:
+            payrun_id: Pay run ID
+
+        Returns:
+            Pay run details with payslips
+        """
+        response = await self._payroll_request("GET", f"PayRuns/{payrun_id}")
+        payruns = response.get("PayRuns", [])
+        if not payruns:
+            raise XeroAPIError(f"Pay run not found: {payrun_id}", status_code=404)
+        return payruns[0]
+
+    async def list_payroll_employees(
+        self,
+        page: int = 1,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List payroll employees.
+
+        Args:
+            page: Page number (100 results per page)
+            status: Filter by status (ACTIVE, TERMINATED)
+
+        Returns:
+            List of payroll employees
+        """
+        params: dict[str, Any] = {"page": page}
+
+        if status:
+            params["where"] = f'Status=="{status}"'
+
+        response = await self._payroll_request("GET", "Employees", params=params)
+        return response.get("Employees", [])

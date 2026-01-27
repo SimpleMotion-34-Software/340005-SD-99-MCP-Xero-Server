@@ -1,17 +1,13 @@
-"""OAuth flow handler for Xero authentication."""
+"""OAuth client credentials flow handler for Xero authentication."""
 
-import asyncio
 import os
-import secrets
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
 
 import aiohttp
-from aiohttp import web
 
 from .token_store import DEFAULT_SHORT_CODES, Tenant, TokenSet, TokenStore
 
@@ -265,30 +261,17 @@ def _get_secure_credential(name: str) -> str | None:
     return None
 
 # Xero OAuth endpoints
-XERO_AUTH_URL = "https://login.xero.com/identity/connect/authorize"
 XERO_TOKEN_URL = "https://identity.xero.com/connect/token"
 XERO_CONNECTIONS_URL = "https://api.xero.com/connections"
 
-# Default scopes for quotes and invoices
-DEFAULT_SCOPES = [
-    "openid",
-    "profile",
-    "email",
-    "accounting.transactions",
-    "accounting.contacts",
-    "accounting.settings.read",
-    "offline_access",
-]
-
 
 class XeroOAuth:
-    """Handle Xero OAuth 2.0 authentication flow."""
+    """Handle Xero OAuth 2.0 client credentials authentication for Custom Connections."""
 
     def __init__(
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
-        redirect_uri: str = "https://localhost:8742/callback",
         token_store: TokenStore | None = None,
         profile: str | None = None,
     ):
@@ -297,7 +280,6 @@ class XeroOAuth:
         Args:
             client_id: Xero app client ID (defaults to keychain or XERO_CLIENT_ID env var)
             client_secret: Xero app client secret (defaults to keychain or XERO_CLIENT_SECRET env var)
-            redirect_uri: OAuth redirect URI
             token_store: Token storage handler
             profile: Credential profile to use (e.g., 'SP', 'SM'). Defaults to active profile.
 
@@ -322,13 +304,10 @@ class XeroOAuth:
             or _get_secure_credential(f"xero-client-secret{suffix}")
             or os.environ.get("XERO_CLIENT_SECRET", "")
         )
-        self.redirect_uri = redirect_uri
 
         # Use profile-specific token store
         token_path = Path.home() / ".xero" / f"tokens{suffix}.enc"
         self.token_store = token_store or TokenStore(storage_path=token_path)
-        self._state: str | None = None
-        self._callback_server: web.AppRunner | None = None
 
     @property
     def is_configured(self) -> bool:
@@ -382,128 +361,8 @@ class XeroOAuth:
         self.token_store.save(tokens)
         return tokens
 
-    def get_authorization_url(self, scopes: list[str] | None = None) -> tuple[str, str]:
-        """Generate authorization URL for user to visit.
-
-        Args:
-            scopes: OAuth scopes to request (defaults to DEFAULT_SCOPES)
-
-        Returns:
-            Tuple of (authorization_url, state)
-        """
-        if not self.is_configured:
-            raise ValueError("XERO_CLIENT_ID and XERO_CLIENT_SECRET must be set")
-
-        self._state = secrets.token_urlsafe(32)
-        scopes = scopes or DEFAULT_SCOPES
-
-        params = {
-            "response_type": "code",
-            "client_id": self.client_id,
-            "redirect_uri": self.redirect_uri,
-            "scope": " ".join(scopes),
-            "state": self._state,
-        }
-
-        return f"{XERO_AUTH_URL}?{urlencode(params)}", self._state
-
-    async def exchange_code(self, code: str, state: str | None = None) -> TokenSet:
-        """Exchange authorization code for tokens.
-
-        Args:
-            code: Authorization code from callback
-            state: State parameter to verify (optional)
-
-        Returns:
-            Token set with access and refresh tokens
-
-        Raises:
-            ValueError: If state doesn't match or exchange fails
-        """
-        if state and self._state and state != self._state:
-            raise ValueError("State mismatch - possible CSRF attack")
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                XERO_TOKEN_URL,
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": self.redirect_uri,
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            ) as response:
-                if response.status != 200:
-                    error = await response.text()
-                    raise ValueError(f"Token exchange failed: {error}")
-
-                data = await response.json()
-
-        # Get all tenants from connections
-        tenant_id, tenants = await self._get_tenant_id(data["access_token"])
-
-        tokens = TokenSet(
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            expires_at=datetime.now().timestamp() + data["expires_in"],
-            token_type=data["token_type"],
-            scope=data.get("scope", "").split(),
-            tenant_id=tenant_id,
-            tenants=tenants,
-        )
-
-        self.token_store.save(tokens)
-        return tokens
-
-    async def refresh_tokens(self) -> TokenSet:
-        """Refresh expired access token using refresh token.
-
-        Returns:
-            New token set
-
-        Raises:
-            ValueError: If no tokens exist or refresh fails
-        """
-        current = self.token_store.load()
-        if not current:
-            raise ValueError("No tokens to refresh - authentication required")
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                XERO_TOKEN_URL,
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": current.refresh_token,
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            ) as response:
-                if response.status != 200:
-                    error = await response.text()
-                    # Clear invalid tokens
-                    self.token_store.delete()
-                    raise ValueError(f"Token refresh failed: {error}")
-
-                data = await response.json()
-
-        tokens = TokenSet(
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            expires_at=datetime.now().timestamp() + data["expires_in"],
-            token_type=data["token_type"],
-            scope=data.get("scope", "").split(),
-            tenant_id=current.tenant_id,
-            tenants=current.tenants,  # Preserve existing tenants
-        )
-
-        self.token_store.save(tokens)
-        return tokens
-
     async def get_valid_tokens(self) -> TokenSet | None:
-        """Get valid tokens, refreshing if necessary.
+        """Get valid tokens, re-authenticating if expired.
 
         Returns:
             Valid token set or None if not authenticated
@@ -514,11 +373,8 @@ class XeroOAuth:
 
         if tokens.is_expired:
             try:
-                # If no refresh token (Custom Connection), re-authenticate
-                if not tokens.refresh_token:
-                    tokens = await self.authenticate_client_credentials()
-                else:
-                    tokens = await self.refresh_tokens()
+                # Re-authenticate using client credentials
+                tokens = await self.authenticate_client_credentials()
             except ValueError:
                 return None
 
@@ -567,78 +423,6 @@ class XeroOAuth:
             return tenants[0].tenant_id, tenants
         return None, []
 
-    async def start_callback_server(self) -> str:
-        """Start local HTTP server to capture OAuth callback.
-
-        Returns:
-            Authorization code from callback
-
-        Raises:
-            TimeoutError: If callback not received within timeout
-        """
-        code_future: asyncio.Future[str] = asyncio.Future()
-
-        async def handle_callback(request: web.Request) -> web.Response:
-            code = request.query.get("code")
-            state = request.query.get("state")
-            error = request.query.get("error")
-
-            if error:
-                code_future.set_exception(ValueError(f"OAuth error: {error}"))
-                return web.Response(
-                    text="<html><body><h1>Authentication Failed</h1>"
-                    f"<p>Error: {error}</p></body></html>",
-                    content_type="text/html",
-                )
-
-            if not code:
-                code_future.set_exception(ValueError("No authorization code received"))
-                return web.Response(
-                    text="<html><body><h1>Error</h1>"
-                    "<p>No authorization code received</p></body></html>",
-                    content_type="text/html",
-                )
-
-            # Verify state
-            if state != self._state:
-                code_future.set_exception(ValueError("State mismatch"))
-                return web.Response(
-                    text="<html><body><h1>Error</h1>"
-                    "<p>Security check failed</p></body></html>",
-                    content_type="text/html",
-                )
-
-            code_future.set_result(code)
-            return web.Response(
-                text="<html><body><h1>Success!</h1>"
-                "<p>You can close this window and return to Claude Code.</p></body></html>",
-                content_type="text/html",
-            )
-
-        app = web.Application()
-        app.router.add_get("/callback", handle_callback)
-
-        runner = web.AppRunner(app)
-        await runner.setup()
-
-        # Extract port from redirect URI
-        port = 8742
-        if ":" in self.redirect_uri.split("//")[1]:
-            port = int(self.redirect_uri.split(":")[-1].split("/")[0])
-
-        site = web.TCPSite(runner, "localhost", port)
-        await site.start()
-
-        self._callback_server = runner
-
-        try:
-            # Wait for callback with timeout
-            code = await asyncio.wait_for(code_future, timeout=300)  # 5 minute timeout
-            return code
-        finally:
-            await runner.cleanup()
-            self._callback_server = None
-
     def disconnect(self) -> None:
         """Disconnect from Xero by removing stored tokens."""
         self.token_store.delete()
@@ -653,7 +437,7 @@ class XeroOAuth:
             return {
                 "connected": False,
                 "configured": False,
-                "message": "Xero credentials not configured. Set XERO_CLIENT_ID and XERO_CLIENT_SECRET.",
+                "message": "Xero credentials not configured. Store xero-client-id and xero-client-secret in keychain.",
             }
 
         tokens = self.token_store.load()
@@ -661,7 +445,7 @@ class XeroOAuth:
             return {
                 "connected": False,
                 "configured": True,
-                "message": "Not connected to Xero. Use xero_auth_url to begin authentication.",
+                "message": "Not connected to Xero. Use xero_connect to authenticate.",
             }
 
         # Build tenant info
