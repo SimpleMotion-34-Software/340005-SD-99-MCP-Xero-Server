@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.1.14] - 2026-01-27
+
+### Added
+- Multi-profile support: both SP and SM can be connected simultaneously
+- `xero_connect_all` tool to authenticate all configured profiles at once
+- Optional `profile` parameter on most tools to specify which profile to use
+- Quarterly wages report supports `profile='ALL'` to run across all connected profiles
+- Combined report shows breakdown by profile with grand totals
+
+### Changed
+- Server now maintains separate OAuth/Client instances per profile
+- `xero_list_profiles` shows connection status for each profile
+- `xero_set_profile` now only changes the default profile (both remain connected)
+
 ## [0.0.1.12] - 2026-01-27
 
 ### Changed
