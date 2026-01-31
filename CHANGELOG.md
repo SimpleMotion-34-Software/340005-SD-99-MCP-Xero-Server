@@ -2,99 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.0.1.16] - 2026-01-27
+## Version History
 
-### Added
-- Overtime tracking in quarterly wages report (separate from OTE)
-- Tax (PAYG withholding) amounts in quarterly wages report
-- TOML export: quarterly reports saved to `90-Govern/92-Compliance/XX-Superannuation/`
-- Report generation timestamp and duration tracking
-
-### Changed
-- OTE calculation now excludes both allowances AND overtime
-- Report table includes new columns: Ordinary Time, Over Time, Taxes
-- Super percentage calculated on true Ordinary Time (wages minus allowances and overtime)
-
-## [0.0.1.14] - 2026-01-27
-
-### Added
-- Multi-profile support: both SP and SM can be connected simultaneously
-- `xero_connect_all` tool to authenticate all configured profiles at once
-- Optional `profile` parameter on most tools to specify which profile to use
-- Quarterly wages report supports `profile='ALL'` to run across all connected profiles
-- Combined report shows breakdown by profile with grand totals
-
-### Changed
-- Server now maintains separate OAuth/Client instances per profile
-- `xero_list_profiles` shows connection status for each profile
-- `xero_set_profile` now only changes the default profile (both remain connected)
-
-## [0.0.1.12] - 2026-01-27
-
-### Changed
-- SP profile keychain suffix changed from empty to `-sp`
-- Credentials now use `xero-client-id-sp` and `xero-client-secret-sp`
-- Token storage changed from `tokens.enc` to `tokens-sp.enc`
-
-## [0.0.1.10] - 2026-01-27
-
-### Added
-- OTE (Ordinary Time Earnings) calculation in quarterly wages report
-- Allowance detection and exclusion from super calculations
-- Per diem allowances identified and separated from OTE
-
-### Changed
-- Super percentage now calculated on OTE, not gross wages
-- Date format changed to DD-MM-YYYY (Australian format)
-- Numeric columns right-aligned in markdown table output
-
-## [0.0.1.8] - 2026-01-27
-
-### Added
-- Xero Payroll AU API support with new tools:
-  - `xero_list_payruns` - List pay runs with status filtering
-  - `xero_get_payrun` - Get pay run details with payslips
-  - `xero_list_payroll_employees` - List payroll employees
-  - `xero_quarterly_wages_report` - Generate quarterly wages report with gross wages, superannuation, and super percentage
-- Quarterly report filters by payment date (for BAS/cash basis reporting)
-- Rate limiting improvements: 1.2s minimum interval between requests to avoid bursts
-
-### Changed
-- Simplified OAuth to client credentials only (Custom Connection apps)
-- Reduced rate limit threshold from 60 to 50 requests per minute (more conservative)
-
-## [0.0.1.6] - 2026-01-25
-
-### Added
-- Multi-profile credential support for multiple Xero Custom Connection apps
-- CREDENTIAL_PROFILES mapping (SP = SimpleMotion.Projects, SM = SimpleMotion)
-- `xero_list_profiles` and `xero_set_profile` tools to switch between profiles
-- Each profile uses separate token storage (tokens.enc, tokens-sm.enc)
-- SimpleMotion short code (SM) added to DEFAULT_SHORT_CODES
-
-## [0.0.1.5] - 2026-01-25
-
-### Fixed
-- Add missing `__main__.py` to enable `python -m mcp_xero` execution
-
-## [0.0.1.4] - 2026-01-25
-
-### Added
-- Initial MCP server implementation
-- OAuth 2.0 authentication with encrypted token storage
-- Contact tools: list, get, create
-- Quote tools: list, get, create, update, send, convert to invoice
-- Invoice tools: list, get, create, update, send
-- Rate limiting with automatic backoff
-- Local callback server for OAuth flow
-
-## [0.0.1.3] - 2026-01-25
-
-### Added
-- Add .claude, .github, .github-private submodules
-- Align with 999998-ST-Default-SimpleMotion-Orgs structure
-
-## [0.0.1.1] - 2026-01-07
-
-### Added
-- Initial project setup
+| Version | Hash | Date | Author | Message |
+|---------|------|------|--------|---------|
+| v0.0.0.25 | bd942da | 2026-01-30 12:07 UTC | Greg Gowans | Convert .simplemotion from submodule to regular directory |
+| v0.0.0.24 | fd6b8aa | 2026-01-27 19:59 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.16 |
+| v0.0.0.23 | ead03d2 | 2026-01-27 19:58 UTC | Greg Gowans | Add overtime and tax tracking to quarterly wages report |
+| v0.0.0.22 | c227488 | 2026-01-27 16:32 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.14 |
+| v0.0.0.21 | d4c6585 | 2026-01-27 16:32 UTC | Greg Gowans | Add multi-profile support for simultaneous Xero connections |
+| v0.0.0.20 | 65e3e78 | 2026-01-27 16:27 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.12 |
+| v0.0.0.19 | 38e0e17 | 2026-01-27 16:27 UTC | Greg Gowans | Change SP profile keychain suffix from empty to -sp |
+| v0.0.0.18 | 23a758c | 2026-01-27 16:12 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.10 |
+| v0.0.0.17 | 31d03a8 | 2026-01-27 16:12 UTC | Greg Gowans | Add OTE calculation and format improvements to quarterly wages report |
+| v0.0.0.16 | 4024297 | 2026-01-27 15:45 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.8 |
+| v0.0.0.15 | d7ec02e | 2026-01-27 15:44 UTC | Greg Gowans | Add Xero Payroll AU API support with quarterly wages report |
+| v0.0.0.14 | 8d1879e | 2026-01-25 22:31 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.6 |
+| v0.0.0.13 | ee37843 | 2026-01-25 22:31 UTC | Greg Gowans | Add multi-profile credential support for multiple Xero Custom Connections |
+| v0.0.0.12 | d30c308 | 2026-01-25 22:26 UTC | Greg Gowans | Add short code support for tenants (SP = SimpleMotion.Projects) |
+| v0.0.0.11 | 7b52ca3 | 2026-01-25 22:10 UTC | Greg Gowans | Add multi-tenant support for multiple Xero organizations |
+| v0.0.0.10 | e33aacd | 2026-01-25 21:47 UTC | Greg Gowans | Update repository references to 340005-SD-99-MCP-Xero-Server |
+| v0.0.0.9 | ac3dcff | 2026-01-25 21:37 UTC | Greg Gowans | Add Linux libsecret/GNOME Keyring support for secure credential storage |
+| v0.0.0.8 | 635ba94 | 2026-01-25 21:35 UTC | Greg Gowans | Add Windows Credential Manager support for cross-platform secure credential storage |
+| v0.0.0.7 | 15303cf | 2026-01-25 21:27 UTC | Greg Gowans | Add macOS Keychain support for secure credential storage |
+| v0.0.0.6 | b43553d | 2026-01-25 21:19 UTC | Greg Gowans | Improve MCP Xero with auto-defaults, partial updates, and better errors |
+| v0.0.0.5 | ffc330b | 2026-01-25 21:06 UTC | Greg Gowans | Add client credentials auth for Custom Connections |
+| v0.0.0.4 | d5f3a07 | 2026-01-25 20:22 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.5 |
+| v0.0.0.3 | 31337bd | 2026-01-25 20:22 UTC | Greg Gowans | Add __main__.py to enable python -m mcp_xero |
+| v0.0.0.2 | b067aeb | 2026-01-25 19:45 UTC | Greg Gowans | Implement Xero MCP server in Python |
+| v0.0.0.1 | 21c261e | 2026-01-25 19:38 UTC | Greg Gowans | Initial commit |
