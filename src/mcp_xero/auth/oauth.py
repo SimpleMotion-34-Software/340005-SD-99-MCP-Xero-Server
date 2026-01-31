@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -305,9 +304,8 @@ class XeroOAuth:
             or os.environ.get("XERO_CLIENT_SECRET", "")
         )
 
-        # Use profile-specific token store
-        token_path = Path.home() / ".xero" / f"tokens{suffix}.enc"
-        self.token_store = token_store or TokenStore(storage_path=token_path)
+        # Use profile-specific token store (keychain-based)
+        self.token_store = token_store or TokenStore(profile=self.profile)
 
     @property
     def is_configured(self) -> bool:

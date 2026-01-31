@@ -26,7 +26,6 @@ dependencies = [
     "mcp>=1.0.0",
     "xero-python>=6.0.0",
     "aiohttp>=3.9.0",
-    "cryptography>=42.0.0",
 ]
 
 [project.optional-dependencies]

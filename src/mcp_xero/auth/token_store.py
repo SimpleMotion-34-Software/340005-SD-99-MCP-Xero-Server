@@ -1,16 +1,11 @@
-"""Secure token storage for Xero OAuth tokens."""
+"""Secure token storage for Xero OAuth tokens using macOS Keychain."""
 
 import json
-import os
-from base64 import b64decode, b64encode
+import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Self
-
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
 # Default short codes for known tenants
@@ -104,79 +99,133 @@ class TokenSet:
 
 
 class TokenStore:
-    """Secure storage for OAuth tokens using encryption."""
+    """Secure storage for OAuth tokens using macOS Keychain."""
 
-    def __init__(self, storage_path: Path | None = None):
+    # Keychain service name for Xero tokens
+    KEYCHAIN_SERVICE = "xero-mcp-tokens"
+
+    def __init__(self, profile: str = "SP"):
         """Initialize token store.
 
         Args:
-            storage_path: Path to token storage file. Defaults to ~/.xero/tokens.enc
+            profile: Credential profile (e.g., 'SP', 'SM')
         """
-        if storage_path is None:
-            storage_path = Path.home() / ".xero" / "tokens.enc"
-        self.storage_path = storage_path
-        self._fernet: Fernet | None = None
+        self.profile = profile.upper()
 
-    def _get_fernet(self) -> Fernet:
-        """Get or create Fernet cipher using machine-specific key."""
-        if self._fernet is None:
-            # Use machine-specific salt derived from hostname and username
-            machine_id = f"{os.uname().nodename}:{os.getlogin()}".encode()
-            salt = machine_id[:16].ljust(16, b"\x00")
+    def _keychain_save(self, data: str) -> bool:
+        """Save data to macOS Keychain.
 
-            # Derive key from salt using PBKDF2
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=salt,
-                iterations=480000,
+        Args:
+            data: JSON string to save
+
+        Returns:
+            True if successful
+        """
+        if sys.platform != "darwin":
+            raise RuntimeError("Keychain storage only supported on macOS")
+
+        # Delete existing entry first (ignore errors if doesn't exist)
+        subprocess.run(
+            [
+                "security", "delete-generic-password",
+                "-s", self.KEYCHAIN_SERVICE,
+                "-a", self.profile,
+            ],
+            capture_output=True,
+        )
+
+        # Add new entry
+        result = subprocess.run(
+            [
+                "security", "add-generic-password",
+                "-s", self.KEYCHAIN_SERVICE,
+                "-a", self.profile,
+                "-w", data,
+                "-U",  # Update if exists
+            ],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+
+    def _keychain_load(self) -> str | None:
+        """Load data from macOS Keychain.
+
+        Returns:
+            JSON string if found, None otherwise
+        """
+        if sys.platform != "darwin":
+            return None
+
+        try:
+            result = subprocess.run(
+                [
+                    "security", "find-generic-password",
+                    "-s", self.KEYCHAIN_SERVICE,
+                    "-a", self.profile,
+                    "-w",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
-            key = b64encode(kdf.derive(b"xero-mcp-token-encryption"))
-            self._fernet = Fernet(key)
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return None
 
-        return self._fernet
+    def _keychain_delete(self) -> bool:
+        """Delete entry from macOS Keychain.
+
+        Returns:
+            True if successful
+        """
+        if sys.platform != "darwin":
+            return False
+
+        result = subprocess.run(
+            [
+                "security", "delete-generic-password",
+                "-s", self.KEYCHAIN_SERVICE,
+                "-a", self.profile,
+            ],
+            capture_output=True,
+        )
+        return result.returncode == 0
 
     def save(self, tokens: TokenSet) -> None:
-        """Save tokens to encrypted storage.
+        """Save tokens to Keychain.
 
         Args:
             tokens: Token set to save
         """
-        # Ensure directory exists
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Encrypt and save
-        data = json.dumps(tokens.to_dict()).encode()
-        encrypted = self._get_fernet().encrypt(data)
-        self.storage_path.write_bytes(encrypted)
-
-        # Set restrictive permissions (owner read/write only)
-        self.storage_path.chmod(0o600)
+        data = json.dumps(tokens.to_dict())
+        if not self._keychain_save(data):
+            raise RuntimeError("Failed to save tokens to Keychain")
 
     def load(self) -> TokenSet | None:
-        """Load tokens from encrypted storage.
+        """Load tokens from Keychain.
 
         Returns:
             Token set if exists and valid, None otherwise
         """
-        if not self.storage_path.exists():
+        data = self._keychain_load()
+        if not data:
             return None
 
         try:
-            encrypted = self.storage_path.read_bytes()
-            data = self._get_fernet().decrypt(encrypted)
             return TokenSet.from_dict(json.loads(data))
-        except Exception:
+        except (json.JSONDecodeError, KeyError):
             return None
 
     def delete(self) -> None:
         """Delete stored tokens."""
-        if self.storage_path.exists():
-            self.storage_path.unlink()
+        self._keychain_delete()
 
     def exists(self) -> bool:
         """Check if tokens exist in storage."""
-        return self.storage_path.exists()
+        return self._keychain_load() is not None
 
     def set_active_tenant(self, tenant_id_or_code: str) -> bool:
         """Set the active tenant by ID or short code.

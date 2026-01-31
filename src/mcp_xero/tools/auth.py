@@ -1,5 +1,7 @@
 """Authentication tools for Xero MCP server."""
 
+import subprocess
+import sys
 from typing import Any, TYPE_CHECKING
 
 from mcp.types import Tool
@@ -9,6 +11,74 @@ from ..auth.oauth import CREDENTIAL_PROFILES, get_active_profile, set_active_pro
 
 if TYPE_CHECKING:
     from ..server import XeroMCPServer
+
+
+def _keychain_set_credential(service: str, password: str) -> bool:
+    """Set a credential in macOS Keychain (service-only pattern for credentials)."""
+    if sys.platform != "darwin":
+        return False
+
+    # Delete existing entry first
+    subprocess.run(
+        ["security", "delete-generic-password", "-s", service],
+        capture_output=True,
+    )
+
+    # Add new entry
+    result = subprocess.run(
+        ["security", "add-generic-password", "-s", service, "-w", password],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _keychain_delete_credential(service: str) -> bool:
+    """Delete a credential from macOS Keychain (service-only pattern)."""
+    if sys.platform != "darwin":
+        return False
+
+    result = subprocess.run(
+        ["security", "delete-generic-password", "-s", service],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _keychain_exists_credential(service: str) -> bool:
+    """Check if a credential exists in macOS Keychain (service-only pattern)."""
+    if sys.platform != "darwin":
+        return False
+
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", service, "-w"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _keychain_exists_token(service: str, account: str) -> bool:
+    """Check if tokens exist in macOS Keychain (service+account pattern)."""
+    if sys.platform != "darwin":
+        return False
+
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", service, "-a", account, "-w"],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _keychain_delete_token(service: str, account: str) -> bool:
+    """Delete tokens from macOS Keychain (service+account pattern)."""
+    if sys.platform != "darwin":
+        return False
+
+    result = subprocess.run(
+        ["security", "delete-generic-password", "-s", service, "-a", account],
+        capture_output=True,
+    )
+    return result.returncode == 0
 
 AUTH_TOOLS = [
     Tool(
@@ -115,6 +185,76 @@ AUTH_TOOLS = [
                 },
             },
             "required": ["profile"],
+        },
+    ),
+    Tool(
+        name="xero_set_credential",
+        description="Set a Xero credential in macOS Keychain. Use this to configure client_id and client_secret for a profile.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "credential": {
+                    "type": "string",
+                    "description": "Credential type: 'client_id' or 'client_secret'",
+                    "enum": ["client_id", "client_secret"],
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The credential value to store",
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Profile to set credential for (e.g., 'SP', 'SM'). Defaults to active profile.",
+                },
+            },
+            "required": ["credential", "value"],
+        },
+    ),
+    Tool(
+        name="xero_delete_credential",
+        description="Delete a Xero credential from macOS Keychain.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "credential": {
+                    "type": "string",
+                    "description": "Credential type: 'client_id' or 'client_secret'",
+                    "enum": ["client_id", "client_secret"],
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Profile to delete credential for (e.g., 'SP', 'SM'). Defaults to active profile.",
+                },
+            },
+            "required": ["credential"],
+        },
+    ),
+    Tool(
+        name="xero_list_credentials",
+        description="List which Xero credentials are configured in Keychain (does not show values).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string",
+                    "description": "Profile to check (e.g., 'SP', 'SM'). If not specified, checks all profiles.",
+                },
+            },
+            "required": [],
+        },
+    ),
+    Tool(
+        name="xero_delete_tokens",
+        description="Delete stored OAuth tokens from Keychain for a profile. Use this to force re-authentication.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "string",
+                    "description": "Profile to delete tokens for (e.g., 'SP', 'SM'). Defaults to active profile.",
+                },
+            },
+            "required": [],
         },
     ),
 ]
@@ -288,5 +428,82 @@ async def handle_auth_tool(
                 "available": available,
                 "message": f"Available profiles: {', '.join(available)}",
             }
+
+    elif name == "xero_set_credential":
+        credential = arguments.get("credential")
+        value = arguments.get("value")
+        profile_arg = arguments.get("profile") or get_active_profile()
+
+        if not credential or not value:
+            return {"error": "credential and value are required"}
+
+        if credential not in ["client_id", "client_secret"]:
+            return {"error": "credential must be 'client_id' or 'client_secret'"}
+
+        suffix = CREDENTIAL_PROFILES.get(profile_arg.upper(), "")
+        service_name = f"xero-{credential.replace('_', '-')}{suffix}"
+
+        success = _keychain_set_credential(service_name, value)
+        if success:
+            return {
+                "success": True,
+                "profile": profile_arg.upper(),
+                "credential": credential,
+                "message": f"Credential '{credential}' set for profile {profile_arg.upper()}",
+            }
+        else:
+            return {"error": "Failed to set credential in Keychain"}
+
+    elif name == "xero_delete_credential":
+        credential = arguments.get("credential")
+        profile_arg = arguments.get("profile") or get_active_profile()
+
+        if not credential:
+            return {"error": "credential is required"}
+
+        suffix = CREDENTIAL_PROFILES.get(profile_arg.upper(), "")
+        service_name = f"xero-{credential.replace('_', '-')}{suffix}"
+
+        success = _keychain_delete_credential(service_name)
+        if success:
+            return {
+                "success": True,
+                "profile": profile_arg.upper(),
+                "credential": credential,
+                "message": f"Credential '{credential}' deleted for profile {profile_arg.upper()}",
+            }
+        else:
+            return {"error": "Failed to delete credential (may not exist)"}
+
+    elif name == "xero_list_credentials":
+        profile_arg = arguments.get("profile")
+        profiles_to_check = [profile_arg.upper()] if profile_arg else list(CREDENTIAL_PROFILES.keys())
+
+        results = {}
+        for prof in profiles_to_check:
+            suffix = CREDENTIAL_PROFILES.get(prof, "")
+            results[prof] = {
+                "client_id": _keychain_exists_credential(f"xero-client-id{suffix}"),
+                "client_secret": _keychain_exists_credential(f"xero-client-secret{suffix}"),
+                "tokens": _keychain_exists_token("xero-mcp-tokens", prof),
+            }
+
+        return {
+            "profiles": results,
+            "message": "Credential status (does not show values)",
+        }
+
+    elif name == "xero_delete_tokens":
+        profile_arg = arguments.get("profile") or get_active_profile()
+        success = _keychain_delete_token("xero-mcp-tokens", profile_arg.upper())
+
+        if success:
+            return {
+                "success": True,
+                "profile": profile_arg.upper(),
+                "message": f"Tokens deleted for profile {profile_arg.upper()}. Re-authentication required.",
+            }
+        else:
+            return {"error": "Failed to delete tokens (may not exist)"}
 
     return {"error": f"Unknown auth tool: {name}"}
