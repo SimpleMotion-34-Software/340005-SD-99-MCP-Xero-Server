@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mcp-xero"
-version = "0.0.1"
+name = "sm-mcp-xero-python"
+version = "0.1.0"
 description = "MCP Server for Xero integration - quotes and invoices management"
 readme = "README.md"
 license = "MIT"
@@ -36,10 +36,10 @@ dev = [
 ]
 
 [project.scripts]
-mcp-xero = "mcp_xero:main"
+sm-mcp-xero-python = "sm_mcp_xero_python:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mcp_xero"]
+packages = ["src/sm_mcp_xero_python"]
 
 [tool.ruff]
 line-length = 100

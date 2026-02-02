@@ -23,7 +23,7 @@ MCP Server for Xero integration, enabling Claude Code to manage contacts, quotes
 ## Project Structure
 
 ```
-src/mcp_xero/
+src/sm_mcp_xero_python/
 ├── __init__.py           # Package entry point
 ├── server.py             # MCP server main
 ├── auth/
@@ -67,7 +67,7 @@ src/mcp_xero/
 pip install -e ".[dev]"
 
 # Run the server directly
-python -m mcp_xero
+python -m sm_mcp_xero_python
 
 # Lint code
 ruff check src/

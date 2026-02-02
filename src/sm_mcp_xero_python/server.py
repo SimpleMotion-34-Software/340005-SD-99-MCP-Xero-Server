@@ -18,6 +18,7 @@ from .tools import (
     handle_contact_tool,
     handle_invoice_tool,
     handle_payroll_tool,
+    handle_purchase_order_tool,
     handle_quote_tool,
 )
 from .xero import XeroClient
@@ -151,6 +152,10 @@ class XeroMCPServer:
         # Invoice tools
         if name.startswith("xero_") and "invoice" in name:
             return await handle_invoice_tool(name, arguments, client)
+
+        # Purchase order tools
+        if name.startswith("xero_") and "purchase_order" in name:
+            return await handle_purchase_order_tool(name, arguments, client)
 
         # Payroll tools
         if name.startswith("xero_") and ("payroll" in name or "payrun" in name or "wages" in name):

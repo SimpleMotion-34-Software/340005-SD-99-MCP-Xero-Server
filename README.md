@@ -54,7 +54,7 @@ Add the MCP server to your Claude Code settings (`~/.claude/settings.json`):
   "mcpServers": {
     "xero": {
       "command": "python",
-      "args": ["-m", "mcp_xero"],
+      "args": ["-m", "sm_mcp_xero_python"],
       "env": {
         "XERO_CLIENT_ID": "your-client-id",
         "XERO_CLIENT_SECRET": "your-client-secret"
@@ -70,7 +70,7 @@ Or if installed as a package:
 {
   "mcpServers": {
     "xero": {
-      "command": "mcp-xero",
+      "command": "sm-mcp-xero-python",
       "env": {
         "XERO_CLIENT_ID": "your-client-id",
         "XERO_CLIENT_SECRET": "your-client-secret"

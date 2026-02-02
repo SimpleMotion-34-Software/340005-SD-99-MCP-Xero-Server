@@ -716,6 +716,180 @@ class XeroClient:
 
         return invoice
 
+    # ==================== Purchase Orders ====================
+
+    async def list_purchase_orders(
+        self,
+        status: str | None = None,
+        contact_id: str | None = None,
+        page: int = 1,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List purchase orders.
+
+        Args:
+            status: Filter by status (DRAFT, SUBMITTED, AUTHORISED, BILLED, DELETED)
+            contact_id: Filter by contact ID
+            page: Page number
+            date_from: Filter POs from date (YYYY-MM-DD)
+            date_to: Filter POs to date (YYYY-MM-DD)
+
+        Returns:
+            List of purchase orders
+        """
+        params: dict[str, Any] = {"page": page}
+        where_clauses = []
+
+        if status:
+            where_clauses.append(f'Status=="{status}"')
+        if contact_id:
+            where_clauses.append(f'Contact.ContactID==Guid("{contact_id}")')
+        if date_from:
+            where_clauses.append(f'Date>=DateTime({date_from.replace("-", ",")})')
+        if date_to:
+            where_clauses.append(f'Date<=DateTime({date_to.replace("-", ",")})')
+
+        if where_clauses:
+            params["where"] = " AND ".join(where_clauses)
+
+        response = await self._request("GET", "PurchaseOrders", params=params)
+        return response.get("PurchaseOrders", [])
+
+    async def get_purchase_order(self, purchase_order_id: str) -> dict[str, Any]:
+        """Get purchase order by ID.
+
+        Args:
+            purchase_order_id: Purchase order ID or number
+
+        Returns:
+            Purchase order details
+        """
+        response = await self._request("GET", f"PurchaseOrders/{purchase_order_id}")
+        purchase_orders = response.get("PurchaseOrders", [])
+        if not purchase_orders:
+            raise XeroAPIError(f"Purchase order not found: {purchase_order_id}", status_code=404)
+        return purchase_orders[0]
+
+    async def create_purchase_order(
+        self,
+        contact_id: str,
+        line_items: list[dict[str, Any]],
+        date: str | None = None,
+        delivery_date: str | None = None,
+        purchase_order_number: str | None = None,
+        reference: str | None = None,
+        delivery_address: str | None = None,
+        attention_to: str | None = None,
+        telephone: str | None = None,
+        delivery_instructions: str | None = None,
+        currency_code: str = "AUD",
+        status: str = "DRAFT",
+    ) -> dict[str, Any]:
+        """Create a new purchase order.
+
+        Args:
+            contact_id: Contact ID (supplier)
+            line_items: List of line items, each with:
+                - Description: Line item description
+                - Quantity: Quantity (default 1)
+                - UnitAmount: Price per unit
+                - AccountCode: Account code (e.g., "300" for Purchases)
+                - TaxType: Tax type (optional, e.g., "INPUT" for GST on expenses)
+            date: PO date (YYYY-MM-DD), defaults to today
+            delivery_date: Expected delivery date (YYYY-MM-DD)
+            purchase_order_number: PO number (auto-generated if not provided)
+            reference: Reference text (e.g., supplier quote number)
+            delivery_address: Delivery address
+            attention_to: Attention to name
+            telephone: Contact telephone
+            delivery_instructions: Special delivery instructions
+            currency_code: Currency code (default AUD)
+            status: Initial status (DRAFT or SUBMITTED)
+
+        Returns:
+            Created purchase order
+        """
+        purchase_order: dict[str, Any] = {
+            "Contact": {"ContactID": contact_id},
+            "LineItems": line_items,
+            "CurrencyCode": currency_code,
+            "Status": status,
+            "Date": date or datetime.now().strftime("%Y-%m-%d"),
+        }
+        if delivery_date:
+            purchase_order["DeliveryDate"] = delivery_date
+        if purchase_order_number:
+            purchase_order["PurchaseOrderNumber"] = purchase_order_number
+        if reference:
+            purchase_order["Reference"] = reference
+        if delivery_address:
+            purchase_order["DeliveryAddress"] = delivery_address
+        if attention_to:
+            purchase_order["AttentionTo"] = attention_to
+        if telephone:
+            purchase_order["Telephone"] = telephone
+        if delivery_instructions:
+            purchase_order["DeliveryInstructions"] = delivery_instructions
+
+        response = await self._request("POST", "PurchaseOrders", data={"PurchaseOrders": [purchase_order]})
+        return response.get("PurchaseOrders", [{}])[0]
+
+    async def update_purchase_order(
+        self,
+        purchase_order_id: str,
+        status: str | None = None,
+        line_items: list[dict[str, Any]] | None = None,
+        delivery_date: str | None = None,
+        reference: str | None = None,
+        delivery_address: str | None = None,
+        attention_to: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing purchase order.
+
+        Args:
+            purchase_order_id: Purchase order ID to update
+            status: New status (DRAFT, SUBMITTED, AUTHORISED, DELETED)
+            line_items: Updated line items (replaces all existing)
+            delivery_date: New delivery date
+            reference: New reference
+            delivery_address: New delivery address
+            attention_to: New attention to name
+
+        Returns:
+            Updated purchase order
+        """
+        # Fetch existing PO to preserve required fields
+        existing = await self.get_purchase_order(purchase_order_id)
+
+        # Build update payload with required fields
+        purchase_order: dict[str, Any] = {
+            "PurchaseOrderID": purchase_order_id,
+            "Contact": {"ContactID": existing["Contact"]["ContactID"]},
+            "Date": existing.get("DateString", "")[:10] if existing.get("DateString") else datetime.now().strftime("%Y-%m-%d"),
+        }
+
+        if status:
+            purchase_order["Status"] = status
+
+        if line_items is not None:
+            purchase_order["LineItems"] = line_items
+
+        if delivery_date:
+            purchase_order["DeliveryDate"] = delivery_date
+
+        if reference is not None:
+            purchase_order["Reference"] = reference
+
+        if delivery_address is not None:
+            purchase_order["DeliveryAddress"] = delivery_address
+
+        if attention_to is not None:
+            purchase_order["AttentionTo"] = attention_to
+
+        response = await self._request("POST", "PurchaseOrders", data={"PurchaseOrders": [purchase_order]})
+        return response.get("PurchaseOrders", [{}])[0]
+
     # ==================== Payroll AU ====================
 
     async def _payroll_request(
