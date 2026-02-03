@@ -20,6 +20,30 @@ RATE_LIMIT_REQUESTS = 50  # per minute (conservative, Xero allows 60)
 RATE_LIMIT_WINDOW = 60  # seconds
 MIN_REQUEST_INTERVAL = 1.2  # minimum seconds between requests to avoid bursts
 
+# Default account codes for invoices
+DEFAULT_SALES_ACCOUNT_CODE = "201"  # Sales - SP
+
+
+def _ensure_line_item_account_code(
+    line_items: list[dict[str, Any]], default_code: str = DEFAULT_SALES_ACCOUNT_CODE
+) -> list[dict[str, Any]]:
+    """Ensure all line items have an AccountCode.
+
+    Args:
+        line_items: List of line item dictionaries
+        default_code: Default account code to use if not specified
+
+    Returns:
+        Line items with AccountCode ensured
+    """
+    processed = []
+    for item in line_items:
+        item_copy = dict(item)
+        if "AccountCode" not in item_copy and "AccountID" not in item_copy:
+            item_copy["AccountCode"] = default_code
+        processed.append(item_copy)
+    return processed
+
 
 class XeroAPIError(Exception):
     """Xero API error."""
@@ -366,7 +390,7 @@ class XeroClient:
                 - Description: Line item description
                 - Quantity: Quantity (default 1)
                 - UnitAmount: Price per unit
-                - AccountCode: Account code (optional)
+                - AccountCode: Account code (default "201" for Sales)
                 - TaxType: Tax type (optional)
             date: Quote date (YYYY-MM-DD), defaults to today
             expiry_date: Expiry date (YYYY-MM-DD)
@@ -380,9 +404,12 @@ class XeroClient:
         Returns:
             Created quote
         """
+        # Ensure all line items have an account code
+        processed_line_items = _ensure_line_item_account_code(line_items)
+
         quote: dict[str, Any] = {
             "Contact": {"ContactID": contact_id},
-            "LineItems": line_items,
+            "LineItems": processed_line_items,
             "CurrencyCode": currency_code,
             "Status": "DRAFT",
             "Date": date or datetime.now().strftime("%Y-%m-%d"),
@@ -466,7 +493,8 @@ class XeroClient:
             quote["Status"] = status
 
         if line_items is not None:
-            quote["LineItems"] = line_items
+            # Ensure all line items have an account code
+            quote["LineItems"] = _ensure_line_item_account_code(line_items)
 
         if expiry_date:
             quote["ExpiryDate"] = expiry_date
@@ -585,7 +613,7 @@ class XeroClient:
                 - Description: Line item description
                 - Quantity: Quantity (default 1)
                 - UnitAmount: Price per unit
-                - AccountCode: Account code (e.g., "200" for sales)
+                - AccountCode: Account code (default "201" for Sales)
                 - TaxType: Tax type (optional)
             invoice_type: ACCREC (sales) or ACCPAY (purchases)
             date: Invoice date (YYYY-MM-DD), defaults to today
@@ -598,10 +626,13 @@ class XeroClient:
         Returns:
             Created invoice
         """
+        # Ensure all line items have an account code
+        processed_line_items = _ensure_line_item_account_code(line_items)
+
         invoice: dict[str, Any] = {
             "Type": invoice_type,
             "Contact": {"ContactID": contact_id},
-            "LineItems": line_items,
+            "LineItems": processed_line_items,
             "CurrencyCode": currency_code,
             "Status": status,
             "Date": date or datetime.now().strftime("%Y-%m-%d"),
@@ -674,7 +705,8 @@ class XeroClient:
             invoice["Status"] = status
 
         if line_items is not None:
-            invoice["LineItems"] = line_items
+            # Ensure all line items have an account code
+            invoice["LineItems"] = _ensure_line_item_account_code(line_items)
 
         if due_date:
             invoice["DueDate"] = due_date
