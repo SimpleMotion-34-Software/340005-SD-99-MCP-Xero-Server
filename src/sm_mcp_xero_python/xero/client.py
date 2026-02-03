@@ -287,18 +287,22 @@ class XeroClient:
         self,
         status: str | None = None,
         contact_id: str | None = None,
+        contact_name: str | None = None,
         page: int = 1,
         date_from: str | None = None,
         date_to: str | None = None,
+        where: str | None = None,
     ) -> list[dict[str, Any]]:
         """List quotes.
 
         Args:
             status: Filter by status (DRAFT, SENT, ACCEPTED, DECLINED, INVOICED)
             contact_id: Filter by contact ID
+            contact_name: Filter by contact name (partial match, e.g., "Action" matches "Action Laser Pty Ltd")
             page: Page number
             date_from: Filter quotes from date (YYYY-MM-DD)
             date_to: Filter quotes to date (YYYY-MM-DD)
+            where: Additional where clause (Xero filter syntax, e.g., 'Contact.Name.Contains("Action")')
 
         Returns:
             List of quotes
@@ -310,10 +314,15 @@ class XeroClient:
             where_clauses.append(f'Status=="{status}"')
         if contact_id:
             where_clauses.append(f'Contact.ContactID==Guid("{contact_id}")')
+        if contact_name:
+            # Use Contains for partial name matching
+            where_clauses.append(f'Contact.Name.Contains("{contact_name}")')
         if date_from:
             where_clauses.append(f'Date>=DateTime({date_from.replace("-", ",")})')
         if date_to:
             where_clauses.append(f'Date<=DateTime({date_to.replace("-", ",")})')
+        if where:
+            where_clauses.append(where)
 
         if where_clauses:
             params["where"] = " AND ".join(where_clauses)
@@ -478,20 +487,24 @@ class XeroClient:
         self,
         status: str | None = None,
         contact_id: str | None = None,
+        contact_name: str | None = None,
         invoice_type: str = "ACCREC",  # Accounts Receivable (sales)
         page: int = 1,
         date_from: str | None = None,
         date_to: str | None = None,
+        where: str | None = None,
     ) -> list[dict[str, Any]]:
         """List invoices.
 
         Args:
             status: Filter by status (DRAFT, SUBMITTED, AUTHORISED, PAID, VOIDED)
             contact_id: Filter by contact ID
+            contact_name: Filter by contact name (partial match, e.g., "Action" matches "Action Laser Pty Ltd")
             invoice_type: ACCREC (sales) or ACCPAY (purchases)
             page: Page number
             date_from: Filter invoices from date (YYYY-MM-DD)
             date_to: Filter invoices to date (YYYY-MM-DD)
+            where: Additional where clause (Xero filter syntax, e.g., 'Contact.Name.Contains("Action")')
 
         Returns:
             List of invoices
@@ -503,10 +516,15 @@ class XeroClient:
             where_clauses.append(f'Status=="{status}"')
         if contact_id:
             where_clauses.append(f'Contact.ContactID==Guid("{contact_id}")')
+        if contact_name:
+            # Use Contains for partial name matching
+            where_clauses.append(f'Contact.Name.Contains("{contact_name}")')
         if date_from:
             where_clauses.append(f'Date>=DateTime({date_from.replace("-", ",")})')
         if date_to:
             where_clauses.append(f'Date<=DateTime({date_to.replace("-", ",")})')
+        if where:
+            where_clauses.append(where)
 
         params["where"] = " AND ".join(where_clauses)
 
@@ -722,18 +740,22 @@ class XeroClient:
         self,
         status: str | None = None,
         contact_id: str | None = None,
+        contact_name: str | None = None,
         page: int = 1,
         date_from: str | None = None,
         date_to: str | None = None,
+        where: str | None = None,
     ) -> list[dict[str, Any]]:
         """List purchase orders.
 
         Args:
             status: Filter by status (DRAFT, SUBMITTED, AUTHORISED, BILLED, DELETED)
             contact_id: Filter by contact ID
+            contact_name: Filter by contact name (partial match, e.g., "Newmark" matches "Newmark Systems Inc")
             page: Page number
             date_from: Filter POs from date (YYYY-MM-DD)
             date_to: Filter POs to date (YYYY-MM-DD)
+            where: Additional where clause (Xero filter syntax, e.g., 'Contact.Name.Contains("Newmark")')
 
         Returns:
             List of purchase orders
@@ -745,10 +767,15 @@ class XeroClient:
             where_clauses.append(f'Status=="{status}"')
         if contact_id:
             where_clauses.append(f'Contact.ContactID==Guid("{contact_id}")')
+        if contact_name:
+            # Use Contains for partial name matching
+            where_clauses.append(f'Contact.Name.Contains("{contact_name}")')
         if date_from:
             where_clauses.append(f'Date>=DateTime({date_from.replace("-", ",")})')
         if date_to:
             where_clauses.append(f'Date<=DateTime({date_to.replace("-", ",")})')
+        if where:
+            where_clauses.append(where)
 
         if where_clauses:
             params["where"] = " AND ".join(where_clauses)
