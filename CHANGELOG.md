@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 | Version | Hash | Date | Author | Message |
 |---------|------|------|--------|---------|
+| v0.0.0.33 | 061888a | 2026-02-03 13:05 UTC | Greg Gowans | Add default account code (201) for invoice and quote line items |
+| v0.0.0.32 | c08a70e | 2026-02-03 12:20 UTC | Greg Gowans | Update CHANGELOG for v0.0.0.31 |
 | v0.0.0.31 | 80d43c5 | 2026-02-03 12:15 UTC | Greg Gowans | Add helpful error messages to update_invoice and update_quote |
 | v0.0.0.30 | b8e0361 | 2026-02-03 10:45 UTC | Greg Gowans | Add contact_name and where parameters to list methods |
 | v0.0.0.29 | a201abe | 2026-02-02 02:29 UTC | Greg Gowans | Rename package to sm-mcp-xero-python, add purchase order support |
