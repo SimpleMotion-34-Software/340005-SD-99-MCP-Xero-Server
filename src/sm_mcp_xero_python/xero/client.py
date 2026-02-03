@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import mimetypes
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -182,6 +184,81 @@ class XeroClient:
                     if response.status >= 400:
                         error_text = await response.text()
                         # Try to parse validation errors into readable format
+                        user_message = self._parse_error_message(error_text)
+                        raise XeroAPIError(
+                            user_message,
+                            status_code=response.status,
+                            details=error_text,
+                        )
+
+                    return await response.json()
+
+            raise XeroAPIError("Max retries exceeded", status_code=429)
+
+    async def _request_attachment(
+        self,
+        method: str,
+        endpoint: str,
+        file_path: str | Path | None = None,
+        content_type: str | None = None,
+    ) -> dict[str, Any]:
+        """Make attachment request to Xero API.
+
+        Args:
+            method: HTTP method (PUT for upload, GET for download/list)
+            endpoint: API endpoint (e.g., "Invoices/{id}/Attachments/{filename}")
+            file_path: Path to file to upload (for PUT requests)
+            content_type: MIME type of file (auto-detected if not provided)
+
+        Returns:
+            Response data
+
+        Raises:
+            XeroAPIError: If request fails
+        """
+        tokens = await self.oauth.get_valid_tokens()
+        if not tokens:
+            raise XeroAPIError("Not authenticated with Xero", status_code=401)
+
+        await self._check_rate_limit()
+
+        url = f"{XERO_API_BASE}/{endpoint}"
+        headers = {
+            "Authorization": f"Bearer {tokens.access_token}",
+            "xero-tenant-id": tokens.tenant_id or "",
+            "Accept": "application/json",
+        }
+
+        data = None
+        if file_path and method == "PUT":
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise XeroAPIError(f"File not found: {file_path}")
+
+            # Detect content type if not provided
+            if not content_type:
+                content_type, _ = mimetypes.guess_type(str(file_path))
+                content_type = content_type or "application/octet-stream"
+
+            headers["Content-Type"] = content_type
+            data = file_path.read_bytes()
+
+        async with aiohttp.ClientSession() as session:
+            for attempt in range(3):
+                async with session.request(
+                    method,
+                    url,
+                    data=data,
+                    headers=headers,
+                ) as response:
+                    if response.status == 429:
+                        retry_after = int(response.headers.get("Retry-After", 60))
+                        logger.warning(f"Rate limited, retrying after {retry_after}s")
+                        await asyncio.sleep(retry_after)
+                        continue
+
+                    if response.status >= 400:
+                        error_text = await response.text()
                         user_message = self._parse_error_message(error_text)
                         raise XeroAPIError(
                             user_message,
@@ -528,6 +605,45 @@ class XeroClient:
         """
         return await self.update_quote(quote_id, status="SENT")
 
+    async def upload_quote_attachment(
+        self,
+        quote_id: str,
+        file_path: str | Path,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload an attachment to a quote.
+
+        Args:
+            quote_id: Quote ID to attach file to
+            file_path: Path to the file to upload
+            filename: Name for the attachment (defaults to original filename)
+
+        Returns:
+            Attachment details including AttachmentID
+        """
+        file_path = Path(file_path)
+        if not filename:
+            filename = file_path.name
+
+        response = await self._request_attachment(
+            "PUT",
+            f"Quotes/{quote_id}/Attachments/{filename}",
+            file_path=file_path,
+        )
+        return response.get("Attachments", [{}])[0]
+
+    async def list_quote_attachments(self, quote_id: str) -> list[dict[str, Any]]:
+        """List attachments on a quote.
+
+        Args:
+            quote_id: Quote ID
+
+        Returns:
+            List of attachment details
+        """
+        response = await self._request("GET", f"Quotes/{quote_id}/Attachments")
+        return response.get("Attachments", [])
+
     # ==================== Invoices ====================
 
     async def list_invoices(
@@ -772,6 +888,45 @@ class XeroClient:
         """
         response = await self._request("POST", f"Invoices/{invoice_id}/Email")
         return response
+
+    async def upload_invoice_attachment(
+        self,
+        invoice_id: str,
+        file_path: str | Path,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload an attachment to an invoice.
+
+        Args:
+            invoice_id: Invoice ID to attach file to
+            file_path: Path to the file to upload
+            filename: Name for the attachment (defaults to original filename)
+
+        Returns:
+            Attachment details including AttachmentID
+        """
+        file_path = Path(file_path)
+        if not filename:
+            filename = file_path.name
+
+        response = await self._request_attachment(
+            "PUT",
+            f"Invoices/{invoice_id}/Attachments/{filename}",
+            file_path=file_path,
+        )
+        return response.get("Attachments", [{}])[0]
+
+    async def list_invoice_attachments(self, invoice_id: str) -> list[dict[str, Any]]:
+        """List attachments on an invoice.
+
+        Args:
+            invoice_id: Invoice ID
+
+        Returns:
+            List of attachment details
+        """
+        response = await self._request("GET", f"Invoices/{invoice_id}/Attachments")
+        return response.get("Attachments", [])
 
     async def convert_quote_to_invoice(self, quote_id: str) -> dict[str, Any]:
         """Convert an accepted quote to an invoice.
