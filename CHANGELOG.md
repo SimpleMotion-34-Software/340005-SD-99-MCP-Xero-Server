@@ -5,8 +5,9 @@ All notable changes to this project will be documented in this file.
 ## Version History
 
 | Version | Hash | Date | Author | Message |
-|---------|------|------|--------|
-| v0.0.0.29 | a201abe | 2026-02-02 02:29 UTC | Greg Gowans | Rename package to sm-mcp-xero-python, add purchase order support |---------|
+|---------|------|------|--------|---------|
+| v0.0.0.30 | b8e0361 | 2026-02-03 10:45 UTC | Greg Gowans | Add contact_name and where parameters to list methods |
+| v0.0.0.29 | a201abe | 2026-02-02 02:29 UTC | Greg Gowans | Rename package to sm-mcp-xero-python, add purchase order support |
 | v0.0.0.25 | bd942da | 2026-01-30 12:07 UTC | Greg Gowans | Convert .simplemotion from submodule to regular directory |
 | v0.0.0.24 | fd6b8aa | 2026-01-27 19:59 UTC | Greg Gowans | Update CHANGELOG for v0.0.1.16 |
 | v0.0.0.23 | ead03d2 | 2026-01-27 19:58 UTC | Greg Gowans | Add overtime and tax tracking to quarterly wages report |
