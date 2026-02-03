@@ -413,11 +413,15 @@ class XeroClient:
         terms: str | None = None,
         title: str | None = None,
         summary: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Update an existing quote.
 
         Fetches existing quote data and merges with provided updates to ensure
-        required fields (Contact, Date) are preserved.
+        required fields (Contact, Date) are preserved automatically.
+
+        Note: Do NOT pass contact_id - it is automatically preserved from the
+        existing quote. This method fetches the current quote data first.
 
         Args:
             quote_id: Quote ID to update
@@ -431,7 +435,22 @@ class XeroClient:
 
         Returns:
             Updated quote
+
+        Raises:
+            TypeError: If unexpected keyword arguments are passed
         """
+        # Catch common mistakes with helpful error messages
+        if kwargs:
+            unexpected = list(kwargs.keys())
+            hints = []
+            if 'contact_id' in unexpected:
+                hints.append("contact_id is auto-preserved from existing quote")
+            if 'date' in unexpected:
+                hints.append("date is auto-preserved from existing quote")
+            hint_msg = f" ({'; '.join(hints)})" if hints else ""
+            raise TypeError(
+                f"update_quote() got unexpected keyword argument(s): {unexpected}{hint_msg}"
+            )
         # Fetch existing quote to preserve required fields
         existing = await self.get_quote(quote_id)
 
@@ -604,11 +623,15 @@ class XeroClient:
         line_items: list[dict[str, Any]] | None = None,
         due_date: str | None = None,
         reference: str | None = None,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Update an existing invoice.
 
         Fetches existing invoice data and merges with provided updates to ensure
-        required fields (Contact, Date, Type) are preserved.
+        required fields (Contact, Date, Type) are preserved automatically.
+
+        Note: Do NOT pass contact_id - it is automatically preserved from the
+        existing invoice. This method fetches the current invoice data first.
 
         Args:
             invoice_id: Invoice ID to update
@@ -619,7 +642,22 @@ class XeroClient:
 
         Returns:
             Updated invoice
+
+        Raises:
+            TypeError: If unexpected keyword arguments are passed
         """
+        # Catch common mistakes with helpful error messages
+        if kwargs:
+            unexpected = list(kwargs.keys())
+            hints = []
+            if 'contact_id' in unexpected:
+                hints.append("contact_id is auto-preserved from existing invoice")
+            if 'date' in unexpected:
+                hints.append("date is auto-preserved from existing invoice")
+            hint_msg = f" ({'; '.join(hints)})" if hints else ""
+            raise TypeError(
+                f"update_invoice() got unexpected keyword argument(s): {unexpected}{hint_msg}"
+            )
         # Fetch existing invoice to preserve required fields
         existing = await self.get_invoice(invoice_id)
 
