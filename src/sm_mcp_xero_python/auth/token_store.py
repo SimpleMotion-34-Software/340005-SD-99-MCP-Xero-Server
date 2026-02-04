@@ -101,9 +101,6 @@ class TokenSet:
 class TokenStore:
     """Secure storage for OAuth tokens using macOS Keychain."""
 
-    # Keychain service name for Xero tokens
-    KEYCHAIN_SERVICE = "xero-mcp-tokens"
-
     def __init__(self, profile: str = "SP"):
         """Initialize token store.
 
@@ -111,6 +108,8 @@ class TokenStore:
             profile: Credential profile (e.g., 'SP', 'SM')
         """
         self.profile = profile.upper()
+        # Keychain service name: {Profile}-Xero (e.g., SP-Xero, SM-Xero)
+        self.keychain_service = f"{self.profile}-Xero"
 
     def _keychain_save(self, data: str) -> bool:
         """Save data to macOS Keychain.
@@ -128,7 +127,7 @@ class TokenStore:
         subprocess.run(
             [
                 "security", "delete-generic-password",
-                "-s", self.KEYCHAIN_SERVICE,
+                "-s", self.keychain_service,
                 "-a", self.profile,
             ],
             capture_output=True,
@@ -138,7 +137,7 @@ class TokenStore:
         result = subprocess.run(
             [
                 "security", "add-generic-password",
-                "-s", self.KEYCHAIN_SERVICE,
+                "-s", self.keychain_service,
                 "-a", self.profile,
                 "-w", data,
                 "-U",  # Update if exists
@@ -161,7 +160,7 @@ class TokenStore:
             result = subprocess.run(
                 [
                     "security", "find-generic-password",
-                    "-s", self.KEYCHAIN_SERVICE,
+                    "-s", self.keychain_service,
                     "-a", self.profile,
                     "-w",
                 ],
@@ -187,7 +186,7 @@ class TokenStore:
         result = subprocess.run(
             [
                 "security", "delete-generic-password",
-                "-s", self.KEYCHAIN_SERVICE,
+                "-s", self.keychain_service,
                 "-a", self.profile,
             ],
             capture_output=True,

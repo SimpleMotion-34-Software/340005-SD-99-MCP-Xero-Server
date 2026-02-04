@@ -11,10 +11,10 @@ import aiohttp
 from .token_store import DEFAULT_SHORT_CODES, Tenant, TokenSet, TokenStore
 
 # Credential profiles for different Xero organizations
-# Maps profile name to keychain service suffix
+# Maps profile name to keychain service prefix
 CREDENTIAL_PROFILES = {
-    "SP": "-sp",        # SimpleMotion.Projects
-    "SM": "-sm",        # SimpleMotion
+    "SP": "SP",        # SimpleMotion.Projects
+    "SM": "SM",        # SimpleMotion
 }
 
 # Current active profile (module-level state)
@@ -61,24 +61,25 @@ def list_profiles() -> list[dict[str, Any]]:
 
 def _check_profile_configured(profile: str) -> bool:
     """Check if a profile has credentials configured."""
-    suffix = CREDENTIAL_PROFILES.get(profile.upper(), "")
-    client_id = _get_secure_credential(f"xero-client-id{suffix}")
-    client_secret = _get_secure_credential(f"xero-client-secret{suffix}")
+    prefix = CREDENTIAL_PROFILES.get(profile.upper(), profile.upper())
+    client_id = _get_secure_credential(f"{prefix}-Xero-ClientId")
+    client_secret = _get_secure_credential(f"{prefix}-Xero-ClientSecret")
     return bool(client_id and client_secret)
 
 
-def _get_keychain_password_macos(service: str) -> str | None:
+def _get_keychain_password_macos(service: str, account: str = "xero") -> str | None:
     """Retrieve password from macOS Keychain.
 
     Args:
         service: Keychain service name
+        account: Keychain account name (default: "xero")
 
     Returns:
         Password if found, None otherwise
     """
     try:
         result = subprocess.run(
-            ["security", "find-generic-password", "-s", service, "-w"],
+            ["security", "find-generic-password", "-s", service, "-a", account, "-w"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -285,22 +286,22 @@ class XeroOAuth:
         Credential lookup order:
             1. Explicit parameter
             2. Platform secure storage (profile-specific):
-               - macOS: Keychain (xero-client-id[-profile], xero-client-secret[-profile])
+               - macOS: Keychain ({Profile}-Xero-ClientId, {Profile}-Xero-ClientSecret)
                - Windows: Credential Manager
             3. Environment variable (XERO_CLIENT_ID, XERO_CLIENT_SECRET)
         """
         # Use specified profile or active profile
         self.profile = (profile or _active_profile).upper()
-        suffix = CREDENTIAL_PROFILES.get(self.profile, "")
+        prefix = CREDENTIAL_PROFILES.get(self.profile, self.profile)
 
         self.client_id = (
             client_id
-            or _get_secure_credential(f"xero-client-id{suffix}")
+            or _get_secure_credential(f"{prefix}-Xero-ClientId")
             or os.environ.get("XERO_CLIENT_ID", "")
         )
         self.client_secret = (
             client_secret
-            or _get_secure_credential(f"xero-client-secret{suffix}")
+            or _get_secure_credential(f"{prefix}-Xero-ClientSecret")
             or os.environ.get("XERO_CLIENT_SECRET", "")
         )
 
@@ -435,7 +436,7 @@ class XeroOAuth:
             return {
                 "connected": False,
                 "configured": False,
-                "message": "Xero credentials not configured. Store xero-client-id and xero-client-secret in keychain.",
+                "message": "Xero credentials not configured. Store {Profile}-Xero-ClientId and {Profile}-Xero-ClientSecret in keychain.",
             }
 
         tokens = self.token_store.load()

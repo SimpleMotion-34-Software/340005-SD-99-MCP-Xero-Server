@@ -5,7 +5,8 @@ All notable changes to this project will be documented in this file.
 ## Version History
 
 | Version | Hash | Date | Author | Message |
-|---------|------|------|--------|---------|
+|---------|------|------|--------|
+| v0.0.0.37 | d702771 | 2026-02-04 16:10 UTC | Greg Gowans | Update keychain naming to {Profile}-Xero-{Type} format |---------|
 | v0.0.0.35 | b7ae2fc | 2026-02-03 13:25 UTC | Greg Gowans | Add attachment support for invoices and quotes |
 | v0.0.0.34 | 4778033 | 2026-02-03 13:10 UTC | Greg Gowans | Update CHANGELOG for v0.0.0.33 |
 | v0.0.0.33 | 061888a | 2026-02-03 13:05 UTC | Greg Gowans | Add default account code (201) for invoice and quote line items |
