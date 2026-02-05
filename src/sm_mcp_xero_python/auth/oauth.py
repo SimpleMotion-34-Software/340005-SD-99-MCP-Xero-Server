@@ -62,17 +62,20 @@ def list_profiles() -> list[dict[str, Any]]:
 def _check_profile_configured(profile: str) -> bool:
     """Check if a profile has credentials configured."""
     prefix = CREDENTIAL_PROFILES.get(profile.upper(), profile.upper())
-    client_id = _get_secure_credential(f"{prefix}-Xero-ClientId")
-    client_secret = _get_secure_credential(f"{prefix}-Xero-ClientSecret")
+    client_id = _get_secure_credential(f"{prefix}-Xero-Client-ID")
+    client_secret = _get_secure_credential(f"{prefix}-Xero-Client-Secret")
     return bool(client_id and client_secret)
 
 
-def _get_keychain_password_macos(service: str, account: str = "xero") -> str | None:
+KEYCHAIN_ACCOUNT = "xero-mcp"
+
+
+def _get_keychain_password_macos(service: str, account: str = KEYCHAIN_ACCOUNT) -> str | None:
     """Retrieve password from macOS Keychain.
 
     Args:
-        service: Keychain service name
-        account: Keychain account name (default: "xero")
+        service: Keychain service name (e.g., 'SM-Xero-ClientId')
+        account: Keychain account name (default: 'xero-mcp')
 
     Returns:
         Password if found, None otherwise
@@ -296,12 +299,12 @@ class XeroOAuth:
 
         self.client_id = (
             client_id
-            or _get_secure_credential(f"{prefix}-Xero-ClientId")
+            or _get_secure_credential(f"{prefix}-Xero-Client-ID")
             or os.environ.get("XERO_CLIENT_ID", "")
         )
         self.client_secret = (
             client_secret
-            or _get_secure_credential(f"{prefix}-Xero-ClientSecret")
+            or _get_secure_credential(f"{prefix}-Xero-Client-Secret")
             or os.environ.get("XERO_CLIENT_SECRET", "")
         )
 

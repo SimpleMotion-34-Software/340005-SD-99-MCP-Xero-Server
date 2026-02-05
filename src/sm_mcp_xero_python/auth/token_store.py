@@ -98,6 +98,10 @@ class TokenSet:
         )
 
 
+# Keychain account name for all Xero tokens
+KEYCHAIN_ACCOUNT = "xero-mcp"
+
+
 class TokenStore:
     """Secure storage for OAuth tokens using macOS Keychain."""
 
@@ -110,6 +114,8 @@ class TokenStore:
         self.profile = profile.upper()
         # Keychain service name: {Profile}-Xero (e.g., SP-Xero, SM-Xero)
         self.keychain_service = f"{self.profile}-Xero"
+        # Keychain account name: consistent 'xero-mcp' across all profiles
+        self.keychain_account = KEYCHAIN_ACCOUNT
 
     def _keychain_save(self, data: str) -> bool:
         """Save data to macOS Keychain.
@@ -128,7 +134,7 @@ class TokenStore:
             [
                 "security", "delete-generic-password",
                 "-s", self.keychain_service,
-                "-a", self.profile,
+                "-a", self.keychain_account,
             ],
             capture_output=True,
         )
@@ -138,7 +144,7 @@ class TokenStore:
             [
                 "security", "add-generic-password",
                 "-s", self.keychain_service,
-                "-a", self.profile,
+                "-a", self.keychain_account,
                 "-w", data,
                 "-U",  # Update if exists
             ],
@@ -161,7 +167,7 @@ class TokenStore:
                 [
                     "security", "find-generic-password",
                     "-s", self.keychain_service,
-                    "-a", self.profile,
+                    "-a", self.keychain_account,
                     "-w",
                 ],
                 capture_output=True,
@@ -187,7 +193,7 @@ class TokenStore:
             [
                 "security", "delete-generic-password",
                 "-s", self.keychain_service,
-                "-a", self.profile,
+                "-a", self.keychain_account,
             ],
             capture_output=True,
         )
