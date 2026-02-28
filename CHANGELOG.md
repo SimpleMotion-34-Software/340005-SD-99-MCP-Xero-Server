@@ -6,7 +6,8 @@ All notable changes to this project will be documented in this file.
 
 | Version | Hash | Date | Author | Message |
 |---------|------|------|--------|
-| v0.0.0.40 | ec30b96 | 2026-02-26 04:43 UTC | Greg Gowans | Update submodules: .claude to v0.0.0.189 |
+|
+| v0.0.0.41 | 6f0787c | 2026-02-28 12:29 UTC | Greg Gowans | Update .claude submodule to v0.0.0.199 | v0.0.0.40 | ec30b96 | 2026-02-26 04:43 UTC | Greg Gowans | Update submodules: .claude to v0.0.0.189 |
 | v0.0.0.37 | d702771 | 2026-02-04 16:10 UTC | Greg Gowans | Update keychain naming to {Profile}-Xero-{Type} format |---------|
 | v0.0.0.35 | b7ae2fc | 2026-02-03 13:25 UTC | Greg Gowans | Add attachment support for invoices and quotes |
 | v0.0.0.34 | 4778033 | 2026-02-03 13:10 UTC | Greg Gowans | Update CHANGELOG for v0.0.0.33 |
